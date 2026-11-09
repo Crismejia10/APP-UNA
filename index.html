@@ -5,33 +5,116 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Inventario de Educología | UNA</title>
     <link rel="stylesheet" href="css/estilos.css">
+    <script src="js/app.js" defer></script>
 </head>
-<body>
-    <header>
-        <h1>Inventario de Educología</h1>
-        <p>Universidad Nacional</p>
+<body class="pagina-panel">
+    <header class="barra">
+        <div class="marca">
+            <span class="emblema" aria-hidden="true">E</span>
+            <div><small>UNIVERSIDAD NACIONAL</small><strong>Educología</strong></div>
+        </div>
+        <div class="cuenta-panel">
+            <span id="nombre-perfil"></span>
+            <select id="perfil" hidden aria-label="Perfil">
+                <option value="admin">Administrador</option>
+                <option value="docente">Docente</option>
+            </select>
+            <button type="button" id="salir">Cerrar sesión</button>
+        </div>
     </header>
-    <main>
-    <h2>Inventario de bienes</h2>
 
-    <table>
-        <thead>
-            <tr>
-                <th scope="col">Placa</th>
-                <th scope="col">Descripción</th>
-                <th scope="col">Ubicación</th>
-                <th scope="col">Estado</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td>UNA-001</td>
-                <td>Proyector</td>
-                <td>Aula 3</td>
-                <td>Bueno</td>
-            </tr>
-        </tbody>
-    </table>
-</main>
+    <main>
+    <small>Acceso institucional pendiente de conexión.</small>
+</section>
+        <div class="introduccion">
+            <div>
+                <p id="area" class="etiqueta"></p>
+                <h1 id="titulo"></h1>
+                <p id="subtitulo"></p>
+            </div>
+            <button id="agregar" class="primario">＋ Agregar equipo</button>
+        </div>
+        <p class="aviso">Demostración local. Los datos y las solicitudes se guardan en este navegador.</p>
+        <p id="mensaje" class="mensaje" role="status" hidden></p>
+        <section id="indicadores" class="indicadores" aria-label="Resumen"></section>
+
+        <section class="panel">
+            <div class="cabecera-panel">
+                <h2 id="titulo-inventario">Inventario</h2>
+                <input id="busqueda" type="search" aria-label="Buscar equipos" placeholder="Buscar por placa, equipo o ubicación">
+            </div>
+            <div class="tabla-contenedor">
+                <table>
+                    <thead>
+                        <tr>
+                            <th scope="col">Equipo</th>
+                            <th scope="col">Categoría</th>
+                            <th scope="col">Ubicación</th>
+                            <th scope="col">Estado</th>
+                            <th scope="col">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody id="equipos"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="cabecera-panel"><h2 id="titulo-solicitudes"></h2></div>
+            <div class="tabla-contenedor">
+                <table>
+                    <thead>
+                        <tr>
+                            <th scope="col">Equipo</th>
+                            <th scope="col">Docente</th>
+                            <th scope="col">Motivo</th>
+                            <th scope="col">Fecha</th>
+                            <th scope="col">Estado</th>
+                            <th scope="col">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody id="solicitudes"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <dialog id="dialogo-equipo">
+        <form id="formulario-equipo">
+            <h2 id="titulo-formulario">Agregar equipo</h2>
+            <div class="campos">
+                <label>Placa<input name="placa" required maxlength="40"></label>
+                <label>Nombre del equipo<input name="nombre" required maxlength="100"></label>
+                <label>Categoría<input name="categoria" required maxlength="70"></label>
+                <label>Ubicación<input name="ubicacion" required maxlength="100"></label>
+                <label>Estado
+                    <select name="estado">
+                        <option>Disponible</option>
+                        <option>En mantenimiento</option>
+                    </select>
+                </label>
+            </div>
+            <p class="error" role="alert"></p>
+            <div class="acciones">
+                <button type="button" data-cerrar>Cancelar</button>
+                <button type="submit" class="primario">Guardar equipo</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="dialogo-solicitud">
+        <form id="formulario-solicitud">
+            <h2>Solicitar préstamo</h2>
+            <p id="equipo-solicitado"></p>
+            <div class="campos">
+                <label>Motivo<textarea name="motivo" required maxlength="300" rows="3"></textarea></label>
+            </div>
+            <p class="error" role="alert"></p>
+            <div class="acciones">
+                <button type="button" data-cerrar>Cancelar</button>
+                <button type="submit" class="primario">Enviar solicitud</button>
+            </div>
+        </form>
+    </dialog>
 </body>
 </html>

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Iniciar sesión | Educología UNA</title>
+    <link rel="stylesheet" href="css/estilos.css">
+    <script src="js/acceso.js" defer></script>
+</head>
+<body class="pagina-acceso">
+    <main class="pantalla-acceso">
+        <div class="portada-acceso">
+            <div class="marca-acceso">
+                <span class="emblema" aria-hidden="true">E</span>
+                <span>Educología <small>Universidad Nacional</small></span>
+            </div>
+            <div class="portada-contenido">
+                <p class="etiqueta">Portal de Educología</p>
+                <h1>Inventario<br>de equipos</h1>
+                <p>Consulta los equipos disponibles y gestiona los préstamos de Educología.</p>
+            </div>
+        </div>
+        <section class="tarjeta-acceso" aria-labelledby="titulo-acceso">
+            <h2 id="titulo-acceso">Iniciar sesión</h2>
+            <form id="formulario-acceso">
+                <div class="campos">
+                    <label>Usuario o correo
+                        <input name="usuario" autocomplete="username" required>
+                    </label>
+                    <label>Contraseña
+                        <input name="contrasena" type="password" autocomplete="current-password" required>
+                    </label>
+                </div>
+                <p id="error-acceso" class="error" role="alert"></p>
+                <button type="submit" class="primario">Iniciar sesión</button>
+            </form>
+            <p class="nota-acceso">Acceso de demostración.</p>
+        </section>
+    </main>
+</body>
+</html>
