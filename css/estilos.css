@@ -1,0 +1,18 @@
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+}
+
+header {
+    padding: 24px;
+    background-color: #173d30;
+    color: white;
+}
+main {
+    padding: 24px;
+}
+th,
+td {
+    padding: 30px 12px;
+    text-align: left;
+}
