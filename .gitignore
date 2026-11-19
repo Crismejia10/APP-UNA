@@ -3,3 +3,4 @@
 *.sqlite
 *.sqlite-*
 node_modules/
+dist/

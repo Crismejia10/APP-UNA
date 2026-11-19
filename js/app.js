@@ -1,370 +1,477 @@
+import { api } from './cloud-api.js';
 
-    const PRODUCTS_KEY='educologia-products-v1', REQUESTS_KEY='educologia-requests-v1', ACCOUNTS_KEY='educologia-accounts-v1';
-    const DEFAULT_ACCOUNTS={
-      'admin@educologia.test':{password:'admin123',name:'Administración',role:'admin'},
-      'docente@educologia.test':{password:'docente123',name:'Docente de demostración',role:'teacher'}
-    };
-    const $=id=>document.getElementById(id);
-    const read=(key,fallback)=>{try{return JSON.parse(localStorage.getItem(key))??fallback}catch{return fallback}};
-    let accounts = { ...read(ACCOUNTS_KEY, DEFAULT_ACCOUNTS) };
-    let products=read(PRODUCTS_KEY,[
-      {id:'p1',name:'Proyector multimedia',category:'Audiovisual',model:'Epson PowerLite E20',serial:'EP-E20-240041',code:'EDU-AV-001',location:'Bodega audiovisual',quantity:1,minimum:0},
-      {id:'p2',name:'Computadora portátil',category:'Informática',model:'Dell Latitude 5440',serial:'DL-5440-240118',code:'EDU-TI-014',location:'Laboratorio 2',quantity:1,minimum:0},
-      {id:'p3',name:'Parlante portátil',category:'Audio',model:'JBL EON One Compact',serial:'JB-EON-240027',code:'EDU-AU-006',location:'Sala de recursos',quantity:1,minimum:0}
-    ]);
-    let requests=read(REQUESTS_KEY,[]), currentUser=null;
-    const SESSION_KEY = 'educologia-session-v1';
-    const INVENTORY_KEY = 'educologia-inventory-v2';
-    const savedInventory = read(INVENTORY_KEY, null);
-    if (savedInventory) {
-      products = savedInventory.products;
-      requests = savedInventory.requests;
-    }
-    const DATA_KEYS = [PRODUCTS_KEY, REQUESTS_KEY, ACCOUNTS_KEY, INVENTORY_KEY];
-    let lastStorageSnapshot;
+const $ = id => document.getElementById(id);
+const labels = {
+    pending: 'Pendiente', approved: 'Aprobada · por entregar', delivered: 'En préstamo', rejected: 'Rechazada',
+    returned: 'Devuelta', cancelled: 'Cancelada',
+    available: 'Disponible', reserved: 'Reservado', loaned: 'Prestado', maintenance: 'En mantenimiento', retired: 'De baja'
+};
+const date = new Intl.DateTimeFormat('es-CR', { dateStyle: 'short', timeStyle: 'short' });
+let profile = null;
+let state = { equipment: [], requests: [], profiles: [] };
+let refreshing = false;
+let busy = false;
+let resetPasswordFor = null;
+let recovery = false;
 
-    function storageSnapshot() {
-      return JSON.stringify(DATA_KEYS.map(key => localStorage.getItem(key)));
-    }
+const escape = value => String(value ?? '').replace(/[&<>"']/g, character =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+const stamp = value => value ? date.format(new Date(value)) : '—';
+const badge = status => `<span class="badge ${['pending', 'approved', 'reserved'].includes(status) ? 'waiting' : ['retired', 'rejected', 'maintenance', 'overdue'].includes(status) ? 'low' : ''}">${status === 'overdue' ? 'Vencido' : labels[status] || escape(status)}</span>`;
+const action = (name, id, text, style = 'secondary') =>
+    `<button type="button" class="button compact ${style}" data-action="${name}" data-id="${escape(id)}">${text}</button>`;
 
-    function save(keys) {
-      if (keys.includes(PRODUCTS_KEY) || keys.includes(REQUESTS_KEY)) {
-        persistInventory(
-          keys.includes(PRODUCTS_KEY) ? products : undefined,
-          keys.includes(REQUESTS_KEY) ? requests : undefined
-        );
-      }
-      if (keys.includes(ACCOUNTS_KEY)) localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
-    }
+function toast(message) {
+    $('toast').textContent = message;
+    $('toast').classList.add('show');
+    clearTimeout(toast.timer);
+    toast.timer = setTimeout(() => $('toast').classList.remove('show'), 6000);
+}
 
-    // Guarda disponibilidad e historial en una sola escritura.
-    function persistInventory(updatedProducts, updatedRequests) {
-      const stored = read(INVENTORY_KEY, null);
-      const next = {
-        products: updatedProducts ?? stored?.products ?? products,
-        requests: updatedRequests ?? stored?.requests ?? requests
-      };
-      localStorage.setItem(INVENTORY_KEY, JSON.stringify(next));
-    }
+function errorText(error) {
+    if (error.message === 'Invalid login credentials') return 'El correo o la contraseña son incorrectos.';
+    if (error.message === 'Failed to fetch') return 'No hay conexión con el servidor. Comprueba tu conexión a Internet.';
+    return error.message || 'No se pudo completar la operación.';
+}
 
-    function synchronizeData() {
-      const stored = read(INVENTORY_KEY, null);
-      products = stored?.products ?? read(PRODUCTS_KEY, products);
-      requests = stored?.requests ?? read(REQUESTS_KEY, []);
-      accounts = { ...read(ACCOUNTS_KEY, DEFAULT_ACCOUNTS) };
-      lastStorageSnapshot = storageSnapshot();
+function setBusy(value) {
+    busy = value;
+    document.querySelectorAll('button[type="submit"]').forEach(button => { button.disabled = value; });
+}
 
-      if (!currentUser) return;
-      const account = accounts[currentUser.email];
-      if (!account || account.role !== currentUser.role) {
-        logout();
-        toast('Tu cuenta cambió. Inicia sesión de nuevo.');
-        return;
-      }
-      currentUser = { ...account, email: currentUser.email };
-      render();
-    }
-    const escapeHtml=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    const statusLabel=status=>({pending:'Pendiente',approved:'Aprobada',rejected:'Rechazada',returned:'Devuelta'}[status]||status);
-
-    function returnDetails(request) {
-      if (!request.returnedAt) return '';
-      const date = new Intl.DateTimeFormat('es-CR', {
-        dateStyle: 'short', timeStyle: 'short'
-      }).format(new Date(request.returnedAt));
-      return `<small class="table-secondary">Devolución: ${escapeHtml(date)}</small>`;
-    }
-    function toast(message){$('toast').textContent=message;$('toast').classList.add('show');setTimeout(()=>$('toast').classList.remove('show'),2400)}
-    function login(user) {
-      currentUser = user;
-      try {
-        sessionStorage.setItem(SESSION_KEY, user.email);
-      } catch {
-        toast('El navegador no permite conservar la sesión al recargar.');
-      }
-      $('loginScreen').hidden = true;
-      $('app').hidden = false;
-      $('userLabel').textContent = `${user.name} · ${user.role === 'admin' ? 'Administración' : 'Docente'}`;
-      $('adminView').hidden = user.role !== 'admin';
-      $('teacherView').hidden = user.role !== 'teacher';
-      render();
-    }
-    $('loginForm').addEventListener('submit',e=>{e.preventDefault();const email=$('email').value.trim().toLowerCase(), account=accounts[email];if(!account||account.password!==$('password').value){$('loginError').hidden=false;return}$('loginError').hidden=true;login({...account,email})});
-    function logout() {
-      currentUser = null;
-      try {
-        sessionStorage.removeItem(SESSION_KEY);
-      } catch {}
-      document.querySelectorAll('.modal-backdrop').forEach(modal => modal.classList.remove('open'));
-      $('app').hidden = true;
-      $('loginScreen').hidden = false;
-      $('password').value = '';
-    }
-
-    $('logoutBtn').addEventListener('click', logout);
-    function render(){renderAdmin();renderTeacher()}
-    function renderAdmin(){const q=$('adminSearch').value.trim().toLowerCase();const filtered=products.filter(p=>`${p.name} ${p.category} ${p.model||''} ${p.serial||''} ${p.code||''} ${p.location||''}`.toLowerCase().includes(q));$('productCount').textContent=products.length;$('unitCount').textContent=products.reduce((n,p)=>n+Number(p.quantity),0);const pending=requests.filter(r=>r.status==='pending').length;$('pendingCount').textContent=pending;$('navPendingCount').textContent=pending;$('productRows').innerHTML=filtered.map(p=>`<tr><td><span class="table-primary">${escapeHtml(p.name)}</span><small class="table-secondary">${escapeHtml(p.category||'Sin categoría')}</small></td><td>${escapeHtml(p.model||'—')}</td><td><span class="serial-value">${escapeHtml(p.serial||'Sin serie')}</span></td><td><span class="table-primary">${escapeHtml(p.code||'Sin código')}</span><small class="table-secondary">${escapeHtml(p.location||'Sin ubicación')}</small></td><td><span class="badge ${Number(p.quantity)<=Number(p.minimum)?'low':''}">${Number(p.quantity)<=Number(p.minimum)?'Disponibilidad baja':`${Number(p.quantity)} disponible${Number(p.quantity)===1?'':'s'}`}</span></td><td><div class="actions"><button class="icon-button" aria-label="Editar ${escapeHtml(p.name)}" title="Editar" data-edit="${p.id}">✎</button><button class="icon-button danger" aria-label="Eliminar ${escapeHtml(p.name)}" title="Eliminar" data-delete="${p.id}">⋯</button></div></td></tr>`).join('');$('productEmpty').hidden=filtered.length>0;$('productRows').closest('table').hidden=!filtered.length;
-      const rows=requests.slice().reverse();$('adminRequestRows').innerHTML=rows.map(r=>`<tr><td>${escapeHtml(r.teacher)}</td><td><span class="table-primary">${escapeHtml(r.productName)}</span><small class="table-secondary">${r.productSerial?`Serie: ${escapeHtml(r.productSerial)}`:'Serie no registrada en la solicitud'}</small></td><td>${r.quantity}</td><td>${escapeHtml(r.date)}</td><td><span class="badge ${r.status==='pending'?'waiting':r.status==='rejected'?'low':''}">${statusLabel(r.status)}</span>${returnDetails(r)}</td><td>${r.status==='pending'?`<div class="actions"><button class="button compact" data-approve="${r.id}">Aprobar</button><button class="button danger" data-reject="${r.id}">Rechazar</button></div>`:r.status==='approved'?`<button type="button" class="button secondary" data-return="${escapeHtml(r.id)}">Registrar devolución</button>`:'—'}</td></tr>`).join('');$('requestEmpty').hidden=rows.length>0;$('adminRequestRows').closest('table').hidden=!rows.length;
-      const teachers=Object.entries(accounts).filter(([,account])=>account.role==='teacher');$('teacherAccountRows').innerHTML=teachers.map(([email,account])=>`<tr><td class="product">${escapeHtml(account.name)}</td><td>${escapeHtml(email)}</td><td>Docente</td><td><button type="button" class="button danger" data-delete-teacher="${escapeHtml(email)}" aria-label="Eliminar cuenta de ${escapeHtml(account.name)}">Eliminar cuenta</button></td></tr>`).join('');$('teacherAccountEmpty').hidden=teachers.length>0;$('teacherAccountRows').closest('table').hidden=!teachers.length}
-    function renderTeacher(){const q=$('teacherSearch').value.trim().toLowerCase();const filtered=products.filter(p=>`${p.name} ${p.category} ${p.model||''} ${p.serial||''} ${p.location||''}`.toLowerCase().includes(q));$('catalog').innerHTML=filtered.map(p=>`<article class="catalog-card"><div class="device-art" aria-hidden="true"><span>▣</span><small>${escapeHtml(p.category||'EQUIPO')}</small></div><div class="catalog-info"><span class="eyebrow">${escapeHtml(p.category||'Equipo')}</span><h3>${escapeHtml(p.name)}</h3><p class="catalog-model">${escapeHtml(p.model||'Modelo no especificado')}</p><p class="catalog-serial">Serie <strong>${escapeHtml(p.serial||'No registrada')}</strong></p><p class="stock">${p.quantity} ${Number(p.quantity)===1?'unidad disponible':'unidades disponibles'}</p></div><button class="button" data-request="${p.id}" ${Number(p.quantity)<1?'disabled':''}>Solicitar</button></article>`).join('');$('catalogEmpty').hidden=filtered.length>0;const mine=requests.filter(r=>r.email===currentUser?.email).slice().reverse();$('teacherRequestRows').innerHTML=mine.map(r=>`<tr><td><span class="table-primary">${escapeHtml(r.productName)}</span><small class="table-secondary">${r.productSerial?`Serie: ${escapeHtml(r.productSerial)}`:'Serie no registrada en la solicitud'}</small></td><td>${r.quantity}</td><td>${escapeHtml(r.date)}</td><td><span class="badge ${r.status==='pending'?'waiting':r.status==='rejected'?'low':''}">${statusLabel(r.status)}</span>${returnDetails(r)}</td></tr>`).join('');$('teacherRequestEmpty').hidden=mine.length>0;$('teacherRequestRows').closest('table').hidden=!mine.length}
-    // El formulario registra lotes; el inventario conserva una ficha por dispositivo.
-    const splitSerials = text => text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-    const normalizeSerial = serial => String(serial || '').trim().toUpperCase();
-
-    function productFormError(message) {
-      $('productFormError').textContent = message;
-      $('productFormError').hidden = false;
-      $('productFormError').focus();
-    }
-
-    function updateProductBatchFields() {
-      const count = Number($('productQuantity').value);
-      const validCount = Number.isSafeInteger(count) && count > 0;
-      const entered = splitSerials($('productSerial').value).length;
-      const multiple = validCount && count > 1;
-      $('productSerialLabel').textContent = multiple ? 'Números de serie · uno por equipo' : 'Número de serie';
-      $('productCodeLabel').textContent = multiple ? 'Códigos internos (opcionales)' : 'Código interno (opcional)';
-      $('productSerial').rows = multiple ? 5 : 2;
-      $('productCode').rows = multiple ? 3 : 2;
-      $('productSerial').placeholder = multiple ? 'JBL-001\nJBL-002\nJBL-003' : 'Ej. JBL-001';
-      $('productSerialCount').textContent = validCount
-        ? entered + ' de ' + count + ' series ingresadas'
-        : 'Indica una cantidad entera mayor que cero.';
-      $('productSerialCount').classList.toggle('complete', validCount && entered === count);
-      $('productSaveBtn').textContent = multiple ? 'Guardar ' + count + ' equipos' : 'Guardar equipo';
-    }
-
-    function openProduct(product) {
-      $('productForm').reset();
-      $('productFormError').hidden = true;
-      $('productId').value = product?.id || '';
-      const individual = Boolean(product && Number(product.quantity) <= 1);
-      $('productModalTitle').textContent = product ? 'Editar ficha del equipo' : 'Registrar equipos';
-      $('productQuantityField').hidden = individual;
-      $('productQuantity').disabled = individual;
-      $('productQuantity').value = individual ? 1 : product?.quantity || 1;
-      $('productAvailabilityField').hidden = !individual;
-      $('productAvailability').textContent = Number(product?.quantity) > 0 ? 'Disponible' : 'No disponible';
-      $('productFormHint').textContent = individual
-        ? 'Esta ficha identifica un solo dispositivo. Usa Registrar equipo para agregar más equipos con sus propias series.'
-        : product
-          ? 'Completa una serie por equipo para separar este registro agrupado en fichas individuales.'
-          : 'Registra varios equipos juntos. Cada número de serie creará una ficha individual.';
-      if (product) {
-        $('productName').value = product.name || '';
-        $('productCategory').value = product.category || '';
-        $('productModel').value = product.model || '';
-        $('productSerial').value = product.serial || '';
-        $('productCode').value = product.code || '';
-        $('productLocation').value = product.location || '';
-      }
-      updateProductBatchFields();
-      $('productBackdrop').classList.add('open');
-    }
-
-    function buildProductBatch(draft, inventory, history, makeId) {
-      const existing = draft.id ? inventory.find(item => item.id === draft.id) : null;
-      if (draft.id && !existing) throw new Error('El registro ya no existe. Cierra el formulario y vuelve a abrirlo.');
-      const individual = existing && Number(existing.quantity) <= 1;
-      const count = individual ? 1 : Number(draft.count);
-      if (!Number.isSafeInteger(count) || count < 1) throw new Error('Indica una cantidad entera mayor que cero.');
-      if (!draft.name.trim()) throw new Error('Escribe el nombre del equipo.');
-      const serials = splitSerials(draft.serialText);
-      if (serials.length !== count) {
-        throw new Error('Para registrar ' + count + ' equipos necesitas ' + count + ' series distintas, una por línea. Has ingresado ' + serials.length + '.');
-      }
-      const seen = new Set();
-      const used = new Set(inventory.filter(item => item.id !== draft.id).map(item => normalizeSerial(item.serial)).filter(Boolean));
-      for (const serial of serials) {
-        if (serial.length > 80) throw new Error('Cada número de serie puede tener hasta 80 caracteres.');
-        const key = normalizeSerial(serial);
-        if (seen.has(key)) throw new Error('La serie ' + serial + ' está repetida en la lista.');
-        if (used.has(key)) throw new Error('La serie ' + serial + ' ya está registrada en el inventario.');
-        seen.add(key);
-      }
-      // Una ficha agrupada con historial requiere conciliar sus equipos antes de dividirla.
-      const linked = existing && history.some(request => request.productId === existing.id);
-      if (linked && !individual) {
-        throw new Error('Este registro agrupado tiene solicitudes asociadas. Es necesario revisar esas solicitudes antes de separarlo, para conservar su historial.');
-      }
-      if (linked && normalizeSerial(existing.serial) && normalizeSerial(existing.serial) !== normalizeSerial(serials[0])) {
-        throw new Error('Este equipo ya tiene solicitudes. Conserva su número de serie para mantener la identificación del préstamo.');
-      }
-      const codes = draft.codeText.replace(/\r/g, '').split('\n').map(line => line.trim());
-      if (codes.slice(count).some(Boolean)) throw new Error('Hay más códigos internos que equipos. Revisa el orden de las líneas.');
-      if (codes.some(code => code.length > 40)) throw new Error('Cada código interno puede tener hasta 40 caracteres.');
-      const items = serials.map((serial, index) => ({
-        ...(index === 0 && existing ? existing : {}),
-        id: index === 0 && existing ? existing.id : makeId(),
-        name: draft.name.trim(),
-        category: draft.category.trim(),
-        model: draft.model.trim(),
-        serial,
-        code: codes[index] || '',
-        location: draft.location.trim(),
-        quantity: individual ? Number(existing.quantity) : 1,
-        minimum: 0
-      }));
-      const nextProducts = inventory.slice();
-      if (existing) {
-        const index = nextProducts.findIndex(item => item.id === existing.id);
-        nextProducts.splice(index, 1);
-        return { items, products: nextProducts.slice(0, index).concat(items, nextProducts.slice(index)) };
-      }
-      return { items, products: items.concat(nextProducts) };
-    }
-    function closeModal(id){$(id).classList.remove('open')}
-    document.querySelectorAll('.add-product-btn').forEach(btn=>btn.addEventListener('click',()=>openProduct()));
-    $('addTeacherBtn').addEventListener('click',()=>{$('teacherForm').reset();$('teacherBackdrop').classList.add('open')});
-    document.querySelectorAll('[data-close]').forEach(btn=>btn.addEventListener('click',()=>closeModal(btn.dataset.close)));
-    document.querySelectorAll('.modal-backdrop').forEach(modal=>modal.addEventListener('click',e=>{if(e.target===modal)closeModal(modal.id)}));
-    $('productQuantity').addEventListener('input', updateProductBatchFields);
-    $('productSerial').addEventListener('input', updateProductBatchFields);
-    $('productForm').addEventListener('input', () => { $('productFormError').hidden = true; });
-    $('productForm').addEventListener('submit', e => {
-      e.preventDefault();
-      let batch;
-      try {
-        batch = buildProductBatch({
-          id: $('productId').value,
-          count: $('productQuantity').value,
-          name: $('productName').value,
-          category: $('productCategory').value,
-          model: $('productModel').value,
-          serialText: $('productSerial').value,
-          codeText: $('productCode').value,
-          location: $('productLocation').value
-        }, products, requests, () => crypto.randomUUID());
-      } catch (error) {
-        productFormError(error.message);
-        return;
-      }
-      try {
-        // Guarda todo el lote antes de reemplazar el inventario en memoria.
-        persistInventory(batch.products, undefined);
-      } catch {
-        productFormError('No se pudo guardar en este navegador. La información del formulario sigue aquí para que puedas volver a intentarlo.');
-        return;
-      }
-      products = batch.products;
-      render();
-      closeModal('productBackdrop');
-      toast(batch.items.length > 1 ? batch.items.length + ' equipos registrados, cada uno con su serie' : 'Equipo guardado');
-    });
-    $('teacherForm').addEventListener('submit',e=>{e.preventDefault();const email=$('teacherEmail').value.trim().toLowerCase();if(accounts[email]){toast('Ya existe una cuenta con ese correo');return}accounts[email]={name:$('teacherName').value.trim(),password:$('teacherPassword').value,role:'teacher'};save([ACCOUNTS_KEY]);render();closeModal('teacherBackdrop');toast('Cuenta docente creada')});
-    $('teacherAccountRows').addEventListener('click', event => {
-      const button = event.target.closest('[data-delete-teacher]');
-      if (!button || currentUser?.role !== 'admin') return;
-
-      const email = button.dataset.deleteTeacher;
-      const account = accounts[email];
-      if (!account || account.role !== 'teacher') return;
-
-      const confirmed = confirm(
-        `¿Eliminar la cuenta de ${account.name} (${email})? Su historial de solicitudes se conservará.`
-      );
-      if (!confirmed) return;
-
-      const remainingAccounts = { ...accounts };
-      delete remainingAccounts[email];
-
-      try {
-        localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(remainingAccounts));
-      } catch {
-        toast('No se pudo guardar el cambio. La cuenta sigue activa.');
-        return;
-      }
-
-      accounts = remainingAccounts;
-      render();
-      toast('Cuenta docente eliminada');
-    });
-    $('productRows').addEventListener('click',e=>{const edit=e.target.closest('[data-edit]'),del=e.target.closest('[data-delete]');if(edit)openProduct(products.find(p=>p.id===edit.dataset.edit));if(del){if(requests.some(r=>r.productId===del.dataset.delete&&r.status==='approved')){toast('Registra la devolución antes de eliminar este equipo');return}products=products.filter(p=>p.id!==del.dataset.delete);save([PRODUCTS_KEY]);render();toast('Producto eliminado')}});
-    $('adminRequestRows').addEventListener('click',e=>{const approve=e.target.closest('[data-approve]'),reject=e.target.closest('[data-reject]');const req=requests.find(r=>r.id===(approve?.dataset.approve||reject?.dataset.reject));if(!req||req.status!=='pending')return;if(approve){const item=products.find(p=>p.id===req.productId);if(!item||item.quantity<req.quantity){toast('No hay existencias suficientes');return}item.quantity-=req.quantity;req.status='approved'}else req.status='rejected';save([PRODUCTS_KEY,REQUESTS_KEY]);render();toast(approve?'Solicitud aprobada y existencias actualizadas':'Solicitud rechazada')});
-    $('catalog').addEventListener('click',e=>{const btn=e.target.closest('[data-request]');if(!btn)return;const item=products.find(p=>p.id===btn.dataset.request);$('requestProductId').value=item.id;$('requestProductInfo').textContent=`${item.name}${item.model?` · ${item.model}`:''}${item.serial?` · Serie ${item.serial}`:''} · ${item.quantity} disponibles`;$('requestQuantity').max=item.quantity;$('requestQuantity').value=1;$('requestBackdrop').classList.add('open')});
-    $('requestForm').addEventListener('submit',e=>{e.preventDefault();const item=products.find(p=>p.id===$('requestProductId').value),quantity=Number($('requestQuantity').value);if(!item||quantity<1||quantity>item.quantity){toast('Cantidad no disponible');return}requests.push({id:crypto.randomUUID(),productId:item.id,productName:item.name,productSerial:item.serial||'',quantity,teacher:currentUser.name,email:currentUser.email,date:new Intl.DateTimeFormat('es-CR').format(new Date()),status:'pending'});save([REQUESTS_KEY]);render();closeModal('requestBackdrop');toast('Solicitud enviada a administración')});
-    $('adminSearch').addEventListener('input',renderAdmin);$('teacherSearch').addEventListener('input',renderTeacher);
-    $('adminRequestRows').addEventListener('click', event => {
-      const button = event.target.closest('[data-return]');
-      if (!button || currentUser?.role !== 'admin') return;
-      const id = button.dataset.return;
-      const request = requests.find(item => item.id === id);
-      if (!request || request.status !== 'approved') return;
-      if (!confirm(`¿Confirmas que recibiste ${request.productName} y que puede volver a prestarse?`)) return;
-
-      const registerReturn = () => {
-        synchronizeData();
-        if (currentUser?.role !== 'admin') return;
-        const latestRequest = requests.find(item => item.id === id);
-        if (!latestRequest || latestRequest.status !== 'approved') {
-          toast('Esta solicitud ya fue actualizada.');
-          return;
-        }
-        const equipment = products.find(item => item.id === latestRequest.productId);
-        if (!equipment) {
-          toast('El equipo fue eliminado del inventario. Restáuralo antes de registrar la devolución.');
-          return;
-        }
-        const quantity = Number(latestRequest.quantity);
-        const available = Number(equipment.quantity);
-        if (!Number.isSafeInteger(quantity) || quantity < 1 || !Number.isSafeInteger(available) || available < 0) {
-          toast('Revisa la cantidad del préstamo y del equipo antes de registrar la devolución.');
-          return;
-        }
-
-        const nextProducts = products.map(item => item.id === equipment.id
-          ? { ...item, quantity: available + quantity }
-          : item);
-        const nextRequests = requests.map(item => item.id === id
-          ? { ...item, status: 'returned', returnedAt: new Date().toISOString(), returnedBy: currentUser.email }
-          : item);
-        try {
-          persistInventory(nextProducts, nextRequests);
-        } catch {
-          toast('No se pudo guardar la devolución. El préstamo sigue activo.');
-          return;
-        }
-        products = nextProducts;
-        requests = nextRequests;
-        render();
-        toast('Devolución registrada. El equipo vuelve a estar disponible.');
-      };
-
-      if (navigator.locks) {
-        navigator.locks.request('educologia-return', registerReturn).catch(() => {
-          toast('No se pudo registrar la devolución. Inténtalo de nuevo.');
-        });
-      } else {
-        registerReturn();
-      }
-    });
-    document.querySelectorAll('.section-nav a').forEach(link=>link.addEventListener('click',()=>{link.closest('.section-nav').querySelectorAll('a').forEach(item=>item.classList.remove('active'));link.classList.add('active')}));
-    window.addEventListener('storage', event => {
-      if (event.storageArea !== localStorage) return;
-      if (event.key === null || DATA_KEYS.includes(event.key)) {
-        synchronizeData();
-      }
-    });
-
-    window.addEventListener('focus', synchronizeData);
-
-    // Algunas aperturas como archivo local no notifican cambios a la otra pestaña.
-    // Comparamos el almacenamiento sin redibujar la pantalla cuando sigue igual.
-    window.setInterval(() => {
-      try {
-        if (storageSnapshot() !== lastStorageSnapshot) synchronizeData();
-      } catch {
-        // Conserva la pantalla actual si el navegador restringe el almacenamiento.
-      }
-    }, 1000);
-
-    // Cada pestaña conserva su propia sesión para probar ambos perfiles a la vez.
+async function refresh() {
+    if (!profile || refreshing) return;
+    refreshing = true;
     try {
-      lastStorageSnapshot = storageSnapshot();
-      const email = sessionStorage.getItem(SESSION_KEY);
-      const account = accounts[email];
-      if (account) login({ ...account, email });
-    } catch {
-      toast('Inicia sesión para continuar.');
+        const nextProfile = await api.profile();
+        if (!nextProfile) throw new Error('Inicia sesión de nuevo.');
+        const nextState = await api.snapshot(nextProfile);
+        profile = nextProfile;
+        state = nextState;
+        render();
+        $('connectionStatus').textContent = 'Datos compartidos · Actualizado ' + stamp(new Date().toISOString());
+    } catch (error) {
+        $('connectionStatus').textContent = 'No se pudo actualizar · ' + errorText(error);
+        if (/desactivada|autorización|sesión/.test(error.message)) {
+            showLogin();
+        }
+    } finally {
+        refreshing = false;
     }
-  
+}
+
+function showLogin() {
+    profile = null;
+    state = { equipment: [], requests: [], profiles: [] };
+    document.querySelectorAll('.modal-backdrop').forEach(modal => modal.classList.remove('open'));
+    $('app').hidden = true;
+    $('loginScreen').hidden = false;
+    $('password').value = '';
+}
+
+async function enter() {
+    profile = await api.profile();
+    if (!profile) throw new Error('Inicia sesión para continuar.');
+    state = await api.snapshot(profile);
+    $('loginScreen').hidden = true;
+    $('app').hidden = false;
+    render();
+    $('connectionStatus').textContent = 'Conectado a la base compartida';
+}
+
+function render() {
+    if (!profile) return;
+    const admin = profile.role === 'admin';
+    $('adminView').hidden = !admin;
+    $('teacherView').hidden = admin;
+    $('userLabel').textContent = `${profile.name} · ${admin ? 'Administración' : 'Docente'}`;
+    document.body.dataset.role = profile.role;
+    renderEquipment();
+    renderRequests();
+    if (admin) renderAccounts();
+}
+
+function matches(equipment, query) {
+    return [equipment.name, equipment.category, equipment.model, equipment.serial, equipment.code, equipment.location]
+        .some(value => String(value).toLocaleLowerCase('es').includes(query));
+}
+
+function renderEquipment() {
+    const adminQuery = $('adminSearch').value.trim().toLocaleLowerCase('es');
+    const adminItems = state.equipment.filter(item => matches(item, adminQuery));
+    const active = state.equipment.filter(item => item.status !== 'retired');
+    $('productCount').textContent = active.length;
+    $('unitCount').textContent = active.filter(item => item.status === 'available').length;
+    const pending = state.requests.filter(item => item.status === 'pending').length;
+    $('pendingCount').textContent = pending;
+    $('navPendingCount').textContent = pending;
+
+    $('productRows').innerHTML = adminItems.map(item => `
+        <tr>
+            <td><span class="table-primary">${escape(item.name)}</span><small class="table-secondary">${escape(item.category)}</small></td>
+            <td>${escape(item.model)}</td>
+            <td>${escape(item.serial)}</td>
+            <td>${escape(item.code)}<small class="table-secondary">${escape(item.location)}</small></td>
+            <td>${badge(item.status)}</td>
+            <td><div class="actions">
+                ${action('edit-equipment', item.id, 'Editar')}
+                ${item.status === 'retired' ? action('restore-equipment', item.id, 'Reactivar') : ''}
+                ${['available', 'maintenance'].includes(item.status) ? action('retire-equipment', item.id, 'Dar de baja', 'danger') : ''}
+            </div></td>
+        </tr>`).join('');
+    $('productEmpty').hidden = adminItems.length > 0;
+
+    const query = $('teacherSearch').value.trim().toLocaleLowerCase('es');
+    const catalog = state.equipment.filter(item => item.status !== 'retired' && matches(item, query));
+    $('catalog').innerHTML = catalog.map(item => {
+        const pending = state.requests.some(request =>
+            request.equipment_id === item.id && request.teacher_id === profile.id && request.status === 'pending');
+        return `<article class="catalog-card">
+            <div class="device-art" aria-hidden="true"><span>▣</span><small>${escape(item.category)}</small></div>
+            <div class="catalog-info">
+                <span class="eyebrow">${escape(item.category)}</span>
+                <h3>${escape(item.name)}</h3>
+                <p>${escape(item.model)}</p>
+                <p class="catalog-serial">Serie <strong>${escape(item.serial)}</strong></p>
+                <p>${escape(item.location)}</p>
+                ${badge(item.status)}
+            </div>
+            <button class="button" type="button" data-action="request" data-id="${item.id}"
+                ${item.status !== 'available' || pending ? 'disabled' : ''}>
+                ${pending ? 'Solicitud pendiente' : 'Solicitar'}
+            </button>
+        </article>`;
+    }).join('');
+    $('catalogEmpty').hidden = catalog.length > 0;
+}
+
+function requestDetails(request) {
+    return `<span class="table-primary">${escape(request.equipment_name)}</span>
+        <small class="table-secondary">Serie ${escape(request.equipment_serial)}</small>
+        <small class="table-secondary">${escape(request.reason)}</small>`;
+}
+
+function loanStatus(request) {
+    const overdue = request.status === 'delivered' && Date.parse(request.due_at) < Date.now();
+    const timestamps = [
+        ['Entrega', request.delivered_at], ['Devolución prevista', request.due_at],
+        ['Devolución real', request.returned_at]
+    ];
+    return badge(overdue ? 'overdue' : request.status) + timestamps
+        .filter(([, value]) => value)
+        .map(([label, value]) => `<small class="table-secondary">${label}: ${stamp(value)}</small>`).join('');
+}
+
+function renderRequests() {
+    const requests = [...state.requests].reverse();
+    $('adminRequestRows').innerHTML = requests.map(request => `
+        <tr>
+            <td>${escape(request.teacher_name)}<small class="table-secondary">${escape(request.teacher_email)}</small></td>
+            <td>${requestDetails(request)}</td>
+            <td>1</td>
+            <td>${stamp(request.created_at)}</td>
+            <td>${loanStatus(request)}</td>
+            <td><div class="actions">
+                ${request.status === 'pending' ? action('approve', request.id, 'Aprobar', '') + action('reject', request.id, 'Rechazar', 'danger') : ''}
+                ${request.status === 'approved' ? action('deliver', request.id, 'Registrar entrega') + action('cancel', request.id, 'Cancelar reserva', 'danger') : ''}
+                ${request.status === 'delivered' ? action('return', request.id, 'Registrar devolución') : ''}
+            </div></td>
+        </tr>`).join('');
+    $('requestEmpty').hidden = requests.length > 0;
+    const mine = requests.filter(request => request.teacher_id === profile.id);
+    $('teacherRequestRows').innerHTML = mine.map(request => `
+        <tr>
+            <td>${requestDetails(request)}</td><td>1</td><td>${stamp(request.created_at)}</td>
+            <td>${loanStatus(request)}
+                ${request.status === 'pending' ? action('cancel', request.id, 'Cancelar') : ''}
+            </td>
+        </tr>`).join('');
+    $('teacherRequestEmpty').hidden = mine.length > 0;
+}
+
+function renderAccounts() {
+    const teachers = state.profiles.filter(account => account.role === 'teacher');
+    $('teacherAccountRows').innerHTML = teachers.map(account => `
+        <tr><td>${escape(account.name)}</td><td>${escape(account.email)}</td>
+            <td>${account.active ? 'Activa' : 'Desactivada'}</td>
+            <td><div class="actions">
+                ${action('edit-account', account.id, 'Editar')}
+                ${action('toggle-account', account.id, account.active ? 'Desactivar' : 'Activar', account.active ? 'danger' : 'secondary')}
+                ${action('password-account', account.id, 'Contraseña temporal')}
+            </div></td>
+        </tr>`).join('');
+    $('teacherAccountEmpty').hidden = teachers.length > 0;
+}
+
+function closeModal(id) {
+    $(id).classList.remove('open');
+}
+
+function openEquipment(equipment) {
+    $('productForm').reset();
+    $('productFormError').hidden = true;
+    $('productId').value = equipment?.id || '';
+    $('productModalTitle').textContent = equipment ? 'Editar equipo' : 'Registrar equipos';
+    $('productQuantityField').hidden = Boolean(equipment);
+    $('productQuantity').disabled = Boolean(equipment);
+    $('productQuantity').value = 1;
+    $('productAvailabilityField').hidden = !equipment;
+    $('productAvailability').textContent = equipment ? labels[equipment.status] : '';
+    $('equipmentCondition').disabled = !equipment || ['reserved', 'loaned', 'retired'].includes(equipment.status);
+    $('equipmentCondition').value = equipment?.status === 'maintenance' ? 'maintenance' : 'available';
+    const fields = { productName: 'name', productCategory: 'category', productModel: 'model',
+        productLocation: 'location', productSerial: 'serial', productCode: 'code' };
+    for (const [id, field] of Object.entries(fields)) $(id).value = equipment?.[field] || '';
+    updateBatch();
+    $('productBackdrop').classList.add('open');
+}
+
+function updateBatch() {
+    const count = Number($('productQuantity').value);
+    const serials = $('productSerial').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+    $('productSerialCount').textContent = `${serials.length} de ${count} series ingresadas`;
+    $('productSerial').rows = count > 1 ? 5 : 2;
+}
+
+async function submit(form, operation) {
+    if (busy) return;
+    setBusy(true);
+    const error = form.querySelector('[role="alert"]');
+    if (error) { error.textContent = ''; error.hidden = true; }
+    try {
+        await operation();
+    } catch (exception) {
+        if (error) {
+            error.textContent = errorText(exception);
+            error.hidden = false;
+        } else toast(errorText(exception));
+    } finally {
+        setBusy(false);
+    }
+}
+
+$('loginForm').addEventListener('submit', event => {
+    event.preventDefault();
+    submit(event.currentTarget, async () => {
+        await api.signIn($('email').value.trim(), $('password').value);
+        await enter();
+    });
+});
+$('logoutBtn').addEventListener('click', async () => {
+    try {
+        await api.signOut();
+        showLogin();
+    } catch (error) { toast(errorText(error)); }
+});
+$('refreshBtn').addEventListener('click', refresh);
+$('forgotPassword').addEventListener('click', async () => {
+    if (!$('email').reportValidity()) return;
+    try {
+        await api.recover($('email').value.trim());
+        toast('Si la cuenta existe, recibirás instrucciones en tu correo.');
+    } catch (error) { toast(errorText(error)); }
+});
+
+$('productForm').addEventListener('submit', event => {
+    event.preventDefault();
+    submit(event.currentTarget, async () => {
+        const count = Number($('productQuantity').value);
+        const id = $('productId').value;
+        const serials = $('productSerial').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+        const codes = $('productCode').value.replace(/\r/g, '').split('\n').map(value => value.trim());
+        if (!Number.isSafeInteger(count) || count < 1 || count > 100 || serials.length !== count) {
+            throw new Error('Indica entre 1 y 100 equipos y una serie por equipo.');
+        }
+        if (codes.slice(count).some(Boolean)) throw new Error('Hay más códigos que equipos.');
+        const existing = state.equipment.find(item => item.id === id);
+        const items = serials.map((serial, index) => ({
+            id: id || null, serial, code: codes[index] || '',
+            name: $('productName').value.trim(), category: $('productCategory').value.trim(),
+            model: $('productModel').value.trim(), location: $('productLocation').value.trim(),
+            status: ['reserved', 'loaned'].includes(existing?.status) ? existing.status : $('equipmentCondition').value
+        }));
+        // El lote se valida y guarda en una única transacción en el servidor.
+        await api.rpc('edu_save_equipment', { p_items: items });
+        closeModal('productBackdrop');
+        toast('Equipos guardados.');
+        await refresh();
+    });
+});
+
+$('requestForm').addEventListener('submit', event => {
+    event.preventDefault();
+    submit(event.currentTarget, async () => {
+        await api.rpc('edu_request_equipment', {
+            p_equipment_id: $('requestProductId').value,
+            p_reason: $('requestReason').value.trim()
+        });
+        closeModal('requestBackdrop');
+        toast('Solicitud enviada a administración.');
+        await refresh();
+    });
+});
+
+$('deliveryForm').addEventListener('submit', event => {
+    event.preventDefault();
+    submit(event.currentTarget, async () => {
+        const due = new Date($('deliveryDueAt').value);
+        if (!Number.isFinite(due.getTime()) || due <= new Date()) {
+            throw new Error('La devolución prevista debe ser posterior a la entrega.');
+        }
+        await api.rpc('edu_resolve_request', {
+            p_id: $('deliveryRequestId').value, p_action: 'deliver', p_due_at: due.toISOString()
+        });
+        closeModal('deliveryBackdrop');
+        toast('Entrega registrada.');
+        await refresh();
+    });
+});
+
+function openAccount(account) {
+    $('teacherForm').reset();
+    $('teacherForm').querySelector('[role="alert"]').hidden = true;
+    $('teacherId').value = account?.id || '';
+    $('teacherModalTitle').textContent = account ? 'Editar docente' : 'Crear cuenta docente';
+    $('teacherName').value = account?.name || '';
+    $('teacherEmail').value = account?.email || '';
+    $('teacherEmail').disabled = Boolean(account);
+    $('teacherPassword').required = !account;
+    $('teacherPasswordField').hidden = Boolean(account);
+    $('teacherBackdrop').classList.add('open');
+}
+
+$('teacherForm').addEventListener('submit', event => {
+    event.preventDefault();
+    submit(event.currentTarget, async () => {
+        const id = $('teacherId').value;
+        if (id) {
+            const account = state.profiles.find(item => item.id === id);
+            await api.rpc('edu_manage_teacher', {
+                p_id: id, p_name: $('teacherName').value.trim(), p_active: account.active
+            });
+        } else {
+            await api.account({
+                action: 'create', name: $('teacherName').value.trim(),
+                email: $('teacherEmail').value.trim(), password: $('teacherPassword').value
+            });
+        }
+        $('teacherPassword').value = '';
+        closeModal('teacherBackdrop');
+        toast('Cuenta guardada.');
+        await refresh();
+    });
+});
+
+function openPassword(account = null) {
+    resetPasswordFor = account;
+    $('passwordForm').reset();
+    $('passwordForm').querySelector('[role="alert"]').hidden = true;
+    $('passwordModalTitle').textContent = account ? 'Contraseña temporal del docente' : 'Cambiar mi contraseña';
+    $('passwordBackdrop').classList.add('open');
+}
+$('myPasswordBtn').addEventListener('click', () => openPassword());
+$('passwordForm').addEventListener('submit', event => {
+    event.preventDefault();
+    submit(event.currentTarget, async () => {
+        const password = $('newPassword').value;
+        if (password !== $('confirmPassword').value) throw new Error('Las contraseñas no coinciden.');
+        if (resetPasswordFor) await api.account({ action: 'password', id: resetPasswordFor.id, password });
+        else await api.changePassword(password);
+        recovery = false;
+        closeModal('passwordBackdrop');
+        $('passwordForm').reset();
+        toast('Contraseña actualizada.');
+        if (!profile) await enter();
+    });
+});
+
+document.addEventListener('click', async event => {
+    const button = event.target.closest('[data-action]');
+    if (!button || busy || !profile) return;
+    const { action: command, id } = button.dataset;
+    const equipment = state.equipment.find(item => item.id === id);
+    const account = state.profiles.find(item => item.id === id);
+    if (command === 'edit-equipment') return openEquipment(equipment);
+    if (command === 'edit-account') return openAccount(account);
+    if (command === 'password-account') return openPassword(account);
+    if (command === 'deliver') {
+        const request = state.requests.find(item => item.id === id);
+        if (!request || request.status !== 'approved') return;
+        $('deliveryForm').reset();
+        $('deliveryForm').querySelector('[role="alert"]').hidden = true;
+        $('deliveryRequestId').value = id;
+        $('deliveryInfo').textContent = `${request.equipment_name} · ${request.teacher_name}`;
+        $('deliveryBackdrop').classList.add('open');
+        return;
+    }
+    if (command === 'request') {
+        $('requestForm').reset();
+        $('requestForm').querySelector('[role="alert"]').hidden = true;
+        $('requestProductId').value = id;
+        $('requestQuantity').value = 1;
+        $('requestProductInfo').textContent = `${equipment.name} · Serie ${equipment.serial}`;
+        $('requestBackdrop').classList.add('open');
+        return;
+    }
+    const confirmations = {
+        approve: '¿Aprobar el préstamo de este equipo?',
+        reject: '¿Rechazar la solicitud?',
+        return: '¿Confirmas la recepción del equipo en condiciones de volver a prestarse?',
+        cancel: '¿Cancelar tu solicitud?',
+        'retire-equipment': '¿Dar de baja el equipo? Se conservará el historial.',
+        'restore-equipment': '¿Reactivar el equipo como disponible?',
+        'toggle-account': account?.active ? '¿Desactivar la cuenta y cancelar sus solicitudes pendientes?' : '¿Activar esta cuenta?'
+    };
+    if (!confirm(confirmations[command] || '¿Confirmar la operación?')) return;
+    setBusy(true);
+    try {
+        if (['approve', 'reject', 'return', 'cancel'].includes(command)) {
+            await api.rpc('edu_resolve_request', { p_id: id, p_action: command });
+        } else if (['retire-equipment', 'restore-equipment'].includes(command)) {
+            await api.rpc('edu_set_equipment_status', {
+                p_id: id, p_status: command === 'retire-equipment' ? 'retired' : 'available'
+            });
+        } else if (command === 'toggle-account') {
+            await api.rpc('edu_manage_teacher', { p_id: id, p_name: account.name, p_active: !account.active });
+        }
+        toast('Cambio guardado en la base compartida.');
+        await refresh();
+    } catch (error) {
+        toast(errorText(error));
+        await refresh();
+    } finally { setBusy(false); }
+});
+
+document.querySelectorAll('.add-product-btn').forEach(button => button.addEventListener('click', () => openEquipment()));
+$('addTeacherBtn').addEventListener('click', () => openAccount());
+document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => {
+    if (!busy && !(recovery && button.dataset.close === 'passwordBackdrop')) closeModal(button.dataset.close);
+}));
+document.querySelectorAll('.modal-backdrop').forEach(modal => modal.addEventListener('click', event => {
+    if (event.target === modal && !busy && !recovery) closeModal(modal.id);
+}));
+$('productQuantity').addEventListener('input', updateBatch);
+$('productSerial').addEventListener('input', updateBatch);
+$('adminSearch').addEventListener('input', renderEquipment);
+$('teacherSearch').addEventListener('input', renderEquipment);
+window.addEventListener('focus', refresh);
+setInterval(() => { if (!document.hidden && !busy) refresh(); }, 3000);
+api.client.auth.onAuthStateChange(event => {
+    if (event === 'SIGNED_OUT') showLogin();
+    if (event === 'PASSWORD_RECOVERY') {
+        recovery = true;
+        openPassword();
+    }
+});
+
+async function start() {
+    try {
+        if (await api.session()) {
+            if (!recovery) await enter();
+        }
+    } catch (error) {
+        $('loginError').textContent = errorText(error);
+        $('loginError').hidden = false;
+    }
+}
+start();

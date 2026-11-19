@@ -1,0 +1,3 @@
+[functions.educologia-accounts]
+# La función comprueba el token con Auth y exige un perfil administrador activo.
+verify_jwt = false

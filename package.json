@@ -1,0 +1,14 @@
+{
+  "name": "educologia-inventario",
+  "productName": "Educología",
+  "version": "0.1.0",
+  "private": true,
+  "main": "desktop.cjs",
+  "scripts": {
+    "build": "node scripts/build-web.mjs",
+    "check": "node --check js/app.js && node --check js/cloud-api.js && node --check desktop.cjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

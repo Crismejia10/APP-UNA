@@ -1,116 +1,488 @@
 <!doctype html>
 <html lang="es">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Educología | Inventario</title>
-  <link rel="stylesheet" href="css/estilos.css">
-  <script src="js/app.js" defer></script>
-</head>
-<body>
-  <section class="login-screen" id="loginScreen">
-    <div class="login-layout">
-      <aside class="login-story">
-        <div class="story-brand"><div class="brand-mark">E</div><span>EDUCOLOGÍA</span></div>
-        <div class="story-copy">
-          <p class="story-kicker">Universidad Nacional · Educología</p>
-          <h2>Recursos listos<br>para cada clase.</h2>
-          <p>Consulta equipos, revisa existencias y gestiona solicitudes desde un solo lugar.</p>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Educología | Inventario</title>
+    <link rel="stylesheet" href="css/estilos.css" />
+    <script src="js/vendor/supabase.js"></script>
+    <script type="module" src="js/app.js"></script>
+  </head>
+  <body>
+    <section class="login-screen" id="loginScreen">
+      <div class="login-layout">
+        <aside class="login-story">
+          <div class="story-brand">
+            <img
+              class="una-logo"
+              src="assets/logo-una.png"
+              alt="Universidad Nacional de Costa Rica"
+            />
+            <span>EDUCOLOGÍA</span>
+          </div>
+          <div class="story-copy">
+            <p class="story-kicker">Universidad Nacional · Educología</p>
+            <h2>Recursos listos<br />para cada clase.</h2>
+            <p>Consulta equipos, revisa existencias y gestiona solicitudes desde un solo lugar.</p>
+          </div>
+          <div class="story-preview" aria-hidden="true">
+            <div class="preview-top">
+              <span></span><span></span><span></span><i>Inventario de equipos</i>
+            </div>
+            <div class="preview-main">
+              <div class="preview-icon">▣</div>
+              <div>
+                <small>DISPONIBILIDAD</small><strong>Equipos bajo control</strong
+                ><em>Solicitud y seguimiento</em>
+              </div>
+            </div>
+            <div class="preview-lines"><span></span><span></span><span></span></div>
+          </div>
+          <span class="story-decoration story-decoration-one"></span
+          ><span class="story-decoration story-decoration-two"></span>
+        </aside>
+        <form class="login-card" id="loginForm">
+          <p class="eyebrow">Portal de recursos</p>
+          <h1>Bienvenido</h1>
+          <p class="login-intro">Ingresa con tu cuenta institucional para continuar.</p>
+          <label for="email">Correo electrónico</label>
+          <input
+            id="email"
+            type="email"
+            autocomplete="username"
+            placeholder="nombre@una.ac.cr"
+            required
+          />
+          <label for="password">Contraseña</label>
+          <input
+            id="password"
+            type="password"
+            autocomplete="current-password"
+            placeholder="Tu contraseña"
+            required
+          />
+          <p class="login-error" id="loginError" role="alert" hidden>
+            Correo o contraseña incorrectos.
+          </p>
+          <button class="button login-button" type="submit">
+            Iniciar sesión <span aria-hidden="true">→</span>
+          </button>
+          <button type="button" class="button secondary" id="forgotPassword">Olvidé mi contraseña</button>
+          <p class="login-footnote">Acceso exclusivo para personal autorizado</p>
+        </form>
+      </div>
+    </section>
+
+    <div class="app" id="app" hidden>
+      <header class="topbar">
+        <div class="brand">
+          <img class="una-logo una-logo-small" src="assets/logo-una.png" alt="" />
+          <div>
+            <p class="eyebrow">Universidad Nacional</p>
+            <strong>Educología</strong>
+          </div>
         </div>
-        <div class="story-preview" aria-hidden="true">
-          <div class="preview-top"><span></span><span></span><span></span><i>Inventario de equipos</i></div>
-          <div class="preview-main"><div class="preview-icon">▣</div><div><small>DISPONIBILIDAD</small><strong>Equipos bajo control</strong><em>Solicitud y seguimiento</em></div></div>
-          <div class="preview-lines"><span></span><span></span><span></span></div>
+        <div class="user-tools">
+          <span id="userLabel"></span><button id="myPasswordBtn" type="button" class="button secondary">Mi contraseña</button><button id="logoutBtn" class="button secondary">Cerrar sesión</button>
         </div>
-        <span class="story-decoration story-decoration-one"></span><span class="story-decoration story-decoration-two"></span>
-      </aside>
-      <form class="login-card" id="loginForm">
-        <p class="eyebrow">Portal de recursos</p>
-        <h1>Bienvenido</h1>
-        <p class="login-intro">Ingresa con tu cuenta institucional para continuar.</p>
-        <label for="email">Correo electrónico</label>
-        <input id="email" type="email" autocomplete="username" placeholder="nombre@una.ac.cr" required>
-        <label for="password">Contraseña</label>
-        <input id="password" type="password" autocomplete="current-password" placeholder="Tu contraseña" required>
-        <p class="login-error" id="loginError" role="alert" hidden>Correo o contraseña incorrectos.</p>
-        <button class="button login-button" type="submit">Iniciar sesión <span aria-hidden="true">→</span></button>
-        <details class="demo-access"><summary>Accesos de demostración</summary><p><b>Administración:</b> admin@educologia.test / admin123</p><p><b>Docente:</b> docente@educologia.test / docente123</p></details>
-        <p class="login-footnote">Acceso exclusivo para personal autorizado</p>
+      </header>
+
+      <main class="shell">
+<div class="toolbar"><p id="connectionStatus" role="status">Conectando…</p><button type="button" id="refreshBtn" class="button secondary">Actualizar</button></div>
+        <section id="adminView" hidden>
+          <header class="page-heading">
+            <div>
+              <p class="eyebrow">Administración</p>
+              <h1>Panel de inventario</h1>
+              <p class="subtitle">Gestiona los productos, existencias y solicitudes docentes.</p>
+            </div>
+            <button class="button add-product-btn">＋ Registrar equipos</button>
+          </header>
+          <nav class="section-nav" aria-label="Secciones de administración">
+            <a class="active" href="#inventorySection">Inventario</a
+            ><a href="#requestsSection"
+              >Solicitudes <span class="nav-count" id="navPendingCount">0</span></a
+            ><a href="#accountsSection">Cuentas docentes</a>
+          </nav>
+          <section class="cards" aria-label="Resumen">
+            <div class="card stat-card">
+              <span class="stat-icon">▦</span><span class="card-label">Equipos registrados</span
+              ><strong class="card-value" id="productCount">0</strong
+              ><span class="stat-caption">En el inventario</span>
+            </div>
+            <div class="card stat-card">
+              <span class="stat-icon icon-soft">⌂</span
+              ><span class="card-label">Unidades disponibles</span
+              ><strong class="card-value" id="unitCount">0</strong
+              ><span class="stat-caption">Listas para solicitar</span>
+            </div>
+            <div class="card stat-card">
+              <span class="stat-icon icon-alert">!</span
+              ><span class="card-label">Solicitudes pendientes</span
+              ><strong class="card-value" id="pendingCount">0</strong
+              ><span class="stat-caption">Requieren revisión</span>
+            </div>
+          </section>
+          <section class="panel" id="inventorySection">
+            <div class="toolbar">
+              <div>
+                <p class="eyebrow">Control de activos</p>
+                <h2>Inventario de equipos</h2>
+              </div>
+              <div class="toolbar-tools">
+                <input
+                  id="adminSearch"
+                  class="search"
+                  type="search"
+                  placeholder="Buscar equipo, serie o ubicación…"
+                  aria-label="Buscar equipos"
+                /><button class="button add-product-btn">
+                  <span aria-hidden="true">＋</span> Registrar equipos
+                </button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Equipo</th>
+                    <th>Marca / modelo</th>
+                    <th>Número de serie</th>
+                    <th>Código / ubicación</th>
+                    <th>Disponibilidad</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="productRows"></tbody>
+              </table>
+              <div class="empty" id="productEmpty" hidden>No hay equipos registrados.</div>
+            </div>
+          </section>
+          <section class="panel requests-panel" id="requestsSection">
+            <div class="toolbar">
+              <div>
+                <p class="eyebrow">Gestión de pedidos</p>
+                <h2>Solicitudes de docentes</h2>
+              </div>
+              <span class="muted">Revisa solicitudes, entregas y devoluciones</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Docente</th>
+                    <th>Equipo solicitado</th>
+                    <th>Cantidad</th>
+                    <th>Fecha</th>
+                    <th>Estado</th>
+                    <th>Acción</th>
+                  </tr>
+                </thead>
+                <tbody id="adminRequestRows"></tbody>
+              </table>
+              <div class="empty" id="requestEmpty" hidden>No hay solicitudes todavía.</div>
+            </div>
+          </section>
+          <section class="panel requests-panel" id="accountsSection">
+            <div class="toolbar">
+              <div>
+                <p class="eyebrow">Accesos</p>
+                <h2>Cuentas docentes</h2>
+              </div>
+              <button class="button secondary" id="addTeacherBtn">
+                <span aria-hidden="true">＋</span> Crear cuenta
+              </button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Docente</th>
+                    <th>Correo institucional</th>
+                    <th>Tipo de acceso</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="teacherAccountRows"></tbody>
+              </table>
+              <div class="empty" id="teacherAccountEmpty" hidden>No hay cuentas docentes.</div>
+            </div>
+          </section>
+        </section>
+
+        <section id="teacherView" hidden>
+          <header class="page-heading">
+            <div>
+              <p class="eyebrow">Portal docente</p>
+              <h1>Inventario disponible</h1>
+              <p class="subtitle">Consulta los productos y envía una solicitud a administración.</p>
+            </div>
+          </header>
+          <nav class="section-nav" aria-label="Secciones docentes">
+            <a class="active" href="#catalogSection">Catálogo</a
+            ><a href="#myRequestsSection">Mis solicitudes</a>
+          </nav>
+          <section class="panel" id="catalogSection">
+            <div class="toolbar">
+              <div>
+                <p class="eyebrow">Consulta de equipos</p>
+                <h2>Catálogo disponible</h2>
+              </div>
+              <input
+                id="teacherSearch"
+                class="search"
+                type="search"
+                placeholder="Buscar nombre, serie o modelo…"
+                aria-label="Buscar equipos"
+              />
+            </div>
+            <div class="catalog" id="catalog"></div>
+            <div class="empty" id="catalogEmpty" hidden>No se encontraron equipos.</div>
+          </section>
+          <section class="panel requests-panel" id="myRequestsSection">
+            <div class="toolbar">
+              <div>
+                <p class="eyebrow">Seguimiento</p>
+                <h2>Mis solicitudes</h2>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Equipo solicitado</th>
+                    <th>Cantidad</th>
+                    <th>Fecha</th>
+                    <th>Estado</th>
+                  </tr>
+                </thead>
+                <tbody id="teacherRequestRows"></tbody>
+              </table>
+              <div class="empty" id="teacherRequestEmpty" hidden>
+                Aún no has enviado solicitudes.
+              </div>
+            </div>
+          </section>
+        </section>
+        <p class="demo-note">Educología / UNA · Inventario y préstamos compartidos</p>
+      </main>
+    </div>
+
+    <div
+      class="modal-backdrop"
+      id="productBackdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="productModalTitle"
+    >
+      <form class="modal" id="productForm">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Ficha de activo</p>
+            <h2 id="productModalTitle">Registrar equipos</h2>
+          </div>
+          <button class="close" type="button" data-close="productBackdrop" aria-label="Cerrar">
+            ×
+          </button>
+        </div>
+        <input type="hidden" id="productId" />
+        <p class="form-hint" id="productFormHint">
+          Registra varios equipos juntos. Cada número de serie creará una ficha individual.
+        </p>
+        <div class="form-grid">
+          <div class="field">
+            <label for="productName">Nombre del equipo</label
+            ><input id="productName" required maxlength="80" placeholder="Ej. Parlante portátil" />
+          </div>
+          <div class="field">
+            <label for="productCategory">Categoría</label
+            ><input id="productCategory" maxlength="50" placeholder="Ej. Audiovisual" />
+          </div>
+          <div class="field">
+            <label for="productModel">Marca / modelo</label
+            ><input id="productModel" maxlength="80" placeholder="Ej. JBL EON One" />
+          </div>
+          <div class="field">
+            <label for="productLocation">Ubicación</label
+            ><input id="productLocation" maxlength="80" placeholder="Ej. Bodega audiovisual" />
+          </div>
+          <div class="field full" id="productQuantityField">
+            <label for="productQuantity">Cantidad de equipos a registrar</label>
+            <input
+              id="productQuantity"
+              type="number"
+              min="1"
+              step="1"
+              required
+              value="1"
+              aria-describedby="productQuantityHelp"
+            />
+            <p class="field-help" id="productQuantityHelp">
+              Indica cuántos equipos vas a registrar y escribe una serie distinta para cada uno.
+            </p>
+          </div>
+          <div class="field"><label for="equipmentCondition">Condición</label><select id="equipmentCondition"><option value="available">Disponible</option><option value="maintenance">En mantenimiento</option></select></div><div class="field full" id="productAvailabilityField" hidden>
+            <label>Disponibilidad actual</label>
+            <p class="availability-note" id="productAvailability"></p>
+          </div>
+          <div class="field full">
+            <label for="productSerial" id="productSerialLabel">Número de serie</label>
+            <textarea
+              id="productSerial"
+              rows="2"
+              required
+              spellcheck="false"
+              placeholder="Ej. JBL-001"
+              aria-describedby="productSerialHelp productSerialCount"
+            ></textarea>
+            <p class="field-help" id="productSerialHelp">
+              Escribe o pega un número de serie por línea. No repitas series.
+            </p>
+            <p class="serial-count" id="productSerialCount" role="status"></p>
+          </div>
+          <div class="field full">
+            <label for="productCode" id="productCodeLabel">Código interno (opcional)</label>
+            <textarea
+              id="productCode"
+              rows="2"
+              spellcheck="false"
+              placeholder="Ej. UNA-001"
+              aria-describedby="productCodeHelp"
+            ></textarea>
+            <p class="field-help" id="productCodeHelp">
+              Un código por línea, en el mismo orden que las series. Deja una línea vacía para un
+              equipo sin código.
+            </p>
+          </div>
+          <p
+            class="form-error field full"
+            id="productFormError"
+            role="alert"
+            tabindex="-1"
+            hidden
+          ></p>
+          <div class="form-actions">
+            <button class="button secondary" type="button" data-close="productBackdrop">
+              Cancelar
+            </button>
+            <button class="button" type="submit" id="productSaveBtn">Guardar equipo</button>
+          </div>
+        </div>
       </form>
     </div>
-  </section>
-
-  <div class="app" id="app" hidden>
-    <header class="topbar">
-      <div class="brand"><div class="brand-mark small">E</div><div><p class="eyebrow">Universidad Nacional</p><strong>Educología</strong></div></div>
-      <div class="user-tools"><span id="userLabel"></span><button id="logoutBtn" class="button secondary">Cerrar sesión</button></div>
-    </header>
-
-    <main class="shell">
-      <section id="adminView" hidden>
-        <header class="page-heading"><div><p class="eyebrow">Administración</p><h1>Panel de inventario</h1><p class="subtitle">Gestiona los productos, existencias y solicitudes docentes.</p></div><button class="button add-product-btn">＋ Registrar equipos</button></header>
-        <nav class="section-nav" aria-label="Secciones de administración"><a class="active" href="#inventorySection">Inventario</a><a href="#requestsSection">Solicitudes <span class="nav-count" id="navPendingCount">0</span></a><a href="#accountsSection">Cuentas docentes</a></nav>
-        <section class="cards" aria-label="Resumen"><div class="card stat-card"><span class="stat-icon">▦</span><span class="card-label">Equipos registrados</span><strong class="card-value" id="productCount">0</strong><span class="stat-caption">En el inventario</span></div><div class="card stat-card"><span class="stat-icon icon-soft">⌂</span><span class="card-label">Unidades disponibles</span><strong class="card-value" id="unitCount">0</strong><span class="stat-caption">Listas para solicitar</span></div><div class="card stat-card"><span class="stat-icon icon-alert">!</span><span class="card-label">Solicitudes pendientes</span><strong class="card-value" id="pendingCount">0</strong><span class="stat-caption">Requieren revisión</span></div></section>
-        <section class="panel" id="inventorySection"><div class="toolbar"><div><p class="eyebrow">Control de activos</p><h2>Inventario de equipos</h2></div><div class="toolbar-tools"><input id="adminSearch" class="search" type="search" placeholder="Buscar equipo, serie o ubicación…" aria-label="Buscar equipos"><button class="button add-product-btn"><span aria-hidden="true">＋</span> Registrar equipos</button></div></div><div class="table-wrap"><table><thead><tr><th>Equipo</th><th>Marca / modelo</th><th>Número de serie</th><th>Código / ubicación</th><th>Disponibilidad</th><th>Acciones</th></tr></thead><tbody id="productRows"></tbody></table><div class="empty" id="productEmpty" hidden>No hay equipos registrados.</div></div></section>
-        <section class="panel requests-panel" id="requestsSection"><div class="toolbar"><div><p class="eyebrow">Gestión de pedidos</p><h2>Solicitudes de docentes</h2></div><span class="muted">Aprueba o rechaza las solicitudes</span></div><div class="table-wrap"><table><thead><tr><th>Docente</th><th>Equipo solicitado</th><th>Cantidad</th><th>Fecha</th><th>Estado</th><th>Acción</th></tr></thead><tbody id="adminRequestRows"></tbody></table><div class="empty" id="requestEmpty" hidden>No hay solicitudes todavía.</div></div></section>
-        <section class="panel requests-panel" id="accountsSection"><div class="toolbar"><div><p class="eyebrow">Accesos</p><h2>Cuentas docentes</h2></div><button class="button secondary" id="addTeacherBtn"><span aria-hidden="true">＋</span> Crear cuenta</button></div><div class="table-wrap"><table><thead><tr><th>Docente</th><th>Correo institucional</th><th>Tipo de acceso</th><th>Acciones</th></tr></thead><tbody id="teacherAccountRows"></tbody></table><div class="empty" id="teacherAccountEmpty" hidden>No hay cuentas docentes.</div></div></section>
-      </section>
-
-      <section id="teacherView" hidden>
-        <header class="page-heading"><div><p class="eyebrow">Portal docente</p><h1>Inventario disponible</h1><p class="subtitle">Consulta los productos y envía una solicitud a administración.</p></div></header>
-        <nav class="section-nav" aria-label="Secciones docentes"><a class="active" href="#catalogSection">Catálogo</a><a href="#myRequestsSection">Mis solicitudes</a></nav>
-        <section class="panel" id="catalogSection"><div class="toolbar"><div><p class="eyebrow">Consulta de equipos</p><h2>Catálogo disponible</h2></div><input id="teacherSearch" class="search" type="search" placeholder="Buscar nombre, serie o modelo…" aria-label="Buscar equipos"></div><div class="catalog" id="catalog"></div><div class="empty" id="catalogEmpty" hidden>No se encontraron equipos.</div></section>
-        <section class="panel requests-panel" id="myRequestsSection"><div class="toolbar"><div><p class="eyebrow">Seguimiento</p><h2>Mis solicitudes</h2></div></div><div class="table-wrap"><table><thead><tr><th>Equipo solicitado</th><th>Cantidad</th><th>Fecha</th><th>Estado</th></tr></thead><tbody id="teacherRequestRows"></tbody></table><div class="empty" id="teacherRequestEmpty" hidden>Aún no has enviado solicitudes.</div></div></section>
-      </section>
-      <p class="demo-note">Prototipo local: las cuentas y los datos quedan en este navegador. No uses contraseñas reales.</p>
-    </main>
-  </div>
-
-  <div class="modal-backdrop" id="productBackdrop" role="dialog" aria-modal="true" aria-labelledby="productModalTitle">
-    <form class="modal" id="productForm">
-      <div class="modal-head">
-        <div><p class="eyebrow">Ficha de activo</p><h2 id="productModalTitle">Registrar equipos</h2></div>
-        <button class="close" type="button" data-close="productBackdrop" aria-label="Cerrar">×</button>
-      </div>
-      <input type="hidden" id="productId">
-      <p class="form-hint" id="productFormHint">Registra varios equipos juntos. Cada número de serie creará una ficha individual.</p>
-      <div class="form-grid">
-        <div class="field"><label for="productName">Nombre del equipo</label><input id="productName" required maxlength="80" placeholder="Ej. Parlante portátil"></div>
-        <div class="field"><label for="productCategory">Categoría</label><input id="productCategory" maxlength="50" placeholder="Ej. Audiovisual"></div>
-        <div class="field"><label for="productModel">Marca / modelo</label><input id="productModel" maxlength="80" placeholder="Ej. JBL EON One"></div>
-        <div class="field"><label for="productLocation">Ubicación</label><input id="productLocation" maxlength="80" placeholder="Ej. Bodega audiovisual"></div>
-        <div class="field full" id="productQuantityField">
-          <label for="productQuantity">Cantidad de equipos a registrar</label>
-          <input id="productQuantity" type="number" min="1" step="1" required value="1" aria-describedby="productQuantityHelp">
-          <p class="field-help" id="productQuantityHelp">Indica cuántos equipos vas a registrar y escribe una serie distinta para cada uno.</p>
+    <div
+      class="modal-backdrop"
+      id="requestBackdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="requestModalTitle"
+    >
+      <form class="modal" id="requestForm">
+<div class="field"><label for="requestReason">Motivo del préstamo</label><textarea id="requestReason" required maxlength="500" rows="3"></textarea></div><p class="form-error" role="alert" hidden></p>
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Solicitud docente</p>
+            <h2 id="requestModalTitle">Solicitar equipo</h2>
+          </div>
+          <button class="close" type="button" data-close="requestBackdrop" aria-label="Cerrar">
+            ×
+          </button>
         </div>
-        <div class="field full" id="productAvailabilityField" hidden>
-          <label>Disponibilidad actual</label>
-          <p class="availability-note" id="productAvailability"></p>
+        <input id="requestProductId" type="hidden" />
+        <p id="requestProductInfo" class="muted"></p>
+        <div class="field">
+          <label for="requestQuantity">Cantidad solicitada</label
+          ><input id="requestQuantity" type="number" min="1" max="1" step="1" required readonly value="1">
         </div>
-        <div class="field full">
-          <label for="productSerial" id="productSerialLabel">Número de serie</label>
-          <textarea id="productSerial" rows="2" required spellcheck="false" placeholder="Ej. JBL-001" aria-describedby="productSerialHelp productSerialCount"></textarea>
-          <p class="field-help" id="productSerialHelp">Escribe o pega un número de serie por línea. No repitas series.</p>
-          <p class="serial-count" id="productSerialCount" role="status"></p>
-        </div>
-        <div class="field full">
-          <label for="productCode" id="productCodeLabel">Código interno (opcional)</label>
-          <textarea id="productCode" rows="2" spellcheck="false" placeholder="Ej. UNA-001" aria-describedby="productCodeHelp"></textarea>
-          <p class="field-help" id="productCodeHelp">Un código por línea, en el mismo orden que las series. Deja una línea vacía para un equipo sin código.</p>
-        </div>
-        <p class="form-error field full" id="productFormError" role="alert" tabindex="-1" hidden></p>
         <div class="form-actions">
-          <button class="button secondary" type="button" data-close="productBackdrop">Cancelar</button>
-          <button class="button" type="submit" id="productSaveBtn">Guardar equipo</button>
+          <button class="button secondary" type="button" data-close="requestBackdrop">
+            Cancelar</button
+          ><button class="button" type="submit">Enviar solicitud</button>
         </div>
-      </div>
-    </form>
-  </div>
-  <div class="modal-backdrop" id="requestBackdrop" role="dialog" aria-modal="true" aria-labelledby="requestModalTitle"><form class="modal" id="requestForm"><div class="modal-head"><div><p class="eyebrow">Solicitud docente</p><h2 id="requestModalTitle">Solicitar equipo</h2></div><button class="close" type="button" data-close="requestBackdrop" aria-label="Cerrar">×</button></div><input id="requestProductId" type="hidden"><p id="requestProductInfo" class="muted"></p><div class="field"><label for="requestQuantity">Cantidad solicitada</label><input id="requestQuantity" type="number" min="1" step="1" required></div><div class="form-actions"><button class="button secondary" type="button" data-close="requestBackdrop">Cancelar</button><button class="button" type="submit">Enviar solicitud</button></div></form></div>
-  <div class="modal-backdrop" id="teacherBackdrop" role="dialog" aria-modal="true" aria-labelledby="teacherModalTitle"><form class="modal" id="teacherForm"><div class="modal-head"><div><p class="eyebrow">Administración</p><h2 id="teacherModalTitle">Crear cuenta docente</h2></div><button class="close" type="button" data-close="teacherBackdrop" aria-label="Cerrar">×</button></div><div class="field"><label for="teacherName">Nombre del docente</label><input id="teacherName" required maxlength="80" placeholder="Nombre y apellidos"></div><div class="field"><label for="teacherEmail">Correo electrónico</label><input id="teacherEmail" type="email" required maxlength="120" placeholder="docente@una.ac.cr"></div><div class="field"><label for="teacherPassword">Contraseña temporal</label><input id="teacherPassword" type="password" required minlength="6" autocomplete="new-password"></div><div class="form-actions"><button class="button secondary" type="button" data-close="teacherBackdrop">Cancelar</button><button class="button" type="submit">Crear cuenta</button></div></form></div>
-  <div class="toast" id="toast" role="status"></div>
-
-  
-</body>
+      </form>
+    </div>
+    <div
+      class="modal-backdrop"
+      id="teacherBackdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="teacherModalTitle"
+    >
+      <form class="modal" id="teacherForm"><input id="teacherId" type="hidden"><p class="form-error" role="alert" hidden></p>
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Administración</p>
+            <h2 id="teacherModalTitle">Crear cuenta docente</h2>
+          </div>
+          <button class="close" type="button" data-close="teacherBackdrop" aria-label="Cerrar">
+            ×
+          </button>
+        </div>
+        <div class="field">
+          <label for="teacherName">Nombre del docente</label
+          ><input id="teacherName" required maxlength="80" placeholder="Nombre y apellidos" />
+        </div>
+        <div class="field">
+          <label for="teacherEmail">Correo electrónico</label
+          ><input
+            id="teacherEmail"
+            type="email"
+            required
+            maxlength="120"
+            placeholder="docente@una.ac.cr"
+          />
+        </div>
+        <div class="field" id="teacherPasswordField"><label for="teacherPassword">Contraseña temporal</label
+          ><input
+            id="teacherPassword"
+            type="password"
+            required
+            minlength="12"
+            autocomplete="new-password"
+          />
+        </div>
+        <div class="form-actions">
+          <button class="button secondary" type="button" data-close="teacherBackdrop">
+            Cancelar</button
+          ><button class="button" type="submit">Crear cuenta</button>
+        </div>
+      </form>
+    </div>
+    <div
+      class="modal-backdrop"
+      id="deliveryBackdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="deliveryTitle"
+    >
+      <form class="modal" id="deliveryForm"><p class="form-error" role="alert" hidden></p>
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Préstamo</p>
+            <h2 id="deliveryTitle">Registrar entrega</h2>
+          </div>
+          <button class="close" type="button" data-close="deliveryBackdrop" aria-label="Cerrar">
+            ×
+          </button>
+        </div>
+        <input type="hidden" id="deliveryRequestId" />
+        <p id="deliveryInfo" class="muted"></p>
+        <div class="field">
+          <label for="deliveryDueAt">Devolución prevista · hora de Costa Rica</label>
+          <input type="datetime-local" id="deliveryDueAt" required />
+        </div>
+        <div class="form-actions">
+          <button class="button secondary" type="button" data-close="deliveryBackdrop">
+            Cancelar
+          </button>
+          <button class="button" type="submit">Confirmar entrega</button>
+        </div>
+      </form>
+    </div>
+    <div class="modal-backdrop" id="passwordBackdrop" role="dialog" aria-modal="true" aria-labelledby="passwordModalTitle"><form class="modal" id="passwordForm">
+<h2 id="passwordModalTitle">Cambiar contraseña</h2><div class="field"><label for="newPassword">Nueva contraseña</label><input type="password" id="newPassword" required minlength="12" autocomplete="new-password"></div>
+<div class="field"><label for="confirmPassword">Confirmar contraseña</label><input type="password" id="confirmPassword" required minlength="12" autocomplete="new-password"></div><p class="form-error" role="alert" hidden></p>
+<div class="form-actions"><button type="button" class="button secondary" data-close="passwordBackdrop">Cancelar</button><button type="submit" class="button">Guardar contraseña</button></div></form></div>
+<div class="toast" id="toast" role="status"></div>
+  </body>
 </html>
