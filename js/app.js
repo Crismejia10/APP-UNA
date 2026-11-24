@@ -1,477 +1,857 @@
-import { api } from './cloud-api.js';
+const supabase = window.eduSupabase;
+const $ = (id) => document.getElementById(id);
+let products = [], requests = [], accounts = [], currentUser = null;
+let loadingUserId = null;
+let pendingPasswordUser = null;
 
-const $ = id => document.getElementById(id);
-const labels = {
-    pending: 'Pendiente', approved: 'Aprobada · por entregar', delivered: 'En préstamo', rejected: 'Rechazada',
-    returned: 'Devuelta', cancelled: 'Cancelada',
-    available: 'Disponible', reserved: 'Reservado', loaned: 'Prestado', maintenance: 'En mantenimiento', retired: 'De baja'
-};
-const date = new Intl.DateTimeFormat('es-CR', { dateStyle: 'short', timeStyle: 'short' });
-let profile = null;
-let state = { equipment: [], requests: [], profiles: [] };
-let refreshing = false;
-let busy = false;
-let resetPasswordFor = null;
-let recovery = false;
-
-const escape = value => String(value ?? '').replace(/[&<>"']/g, character =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
-const stamp = value => value ? date.format(new Date(value)) : '—';
-const badge = status => `<span class="badge ${['pending', 'approved', 'reserved'].includes(status) ? 'waiting' : ['retired', 'rejected', 'maintenance', 'overdue'].includes(status) ? 'low' : ''}">${status === 'overdue' ? 'Vencido' : labels[status] || escape(status)}</span>`;
-const action = (name, id, text, style = 'secondary') =>
-    `<button type="button" class="button compact ${style}" data-action="${name}" data-id="${escape(id)}">${text}</button>`;
-
-function toast(message) {
-    $('toast').textContent = message;
-    $('toast').classList.add('show');
-    clearTimeout(toast.timer);
-    toast.timer = setTimeout(() => $('toast').classList.remove('show'), 6000);
+function setLoggedOut(message = '') {
+  currentUser = null;
+  pendingPasswordUser = null;
+  products = [];
+  requests = [];
+  accounts = [];
+  $('app').hidden = true;
+  $('passwordSetupScreen').hidden = true;
+  $('loginScreen').hidden = false;
+  $('password').value = '';
+  $('loginError').textContent = message || 'Correo o contraseña incorrectos.';
+  $('loginError').hidden = !message;
 }
 
-function errorText(error) {
-    if (error.message === 'Invalid login credentials') return 'El correo o la contraseña son incorrectos.';
-    if (error.message === 'Failed to fetch') return 'No hay conexión con el servidor. Comprueba tu conexión a Internet.';
-    return error.message || 'No se pudo completar la operación.';
+function showPasswordSetup(user, mode = 'invite') {
+  pendingPasswordUser = user;
+  $('loginScreen').hidden = true;
+  $('app').hidden = true;
+  $('passwordSetupScreen').hidden = false;
+  $('passwordSetupEmail').textContent = user.email || '';
+  $('passwordSetupScreen').querySelector('.eyebrow').textContent = mode === 'recovery' ? 'Recuperación de acceso' : 'Primer ingreso';
+  $('passwordSetupScreen').querySelector('h1').textContent = mode === 'recovery' ? 'Crea una contraseña nueva' : 'Configura tu contraseña';
+  $('passwordSetupScreen').querySelector('.story-copy h2').innerHTML = mode === 'recovery' ? 'Recupera tu acceso<br />al inventario.' : 'Activa tu acceso<br />al inventario.';
+  $('passwordSetupScreen').querySelector('.story-copy p:last-child').textContent = mode === 'recovery'
+    ? 'Elige una contraseña nueva para continuar.'
+    : 'Configura una contraseña personal para continuar.';
+  $('passwordSetupForm').reset();
+  $('passwordSetupError').hidden = true;
 }
 
-function setBusy(value) {
-    busy = value;
-    document.querySelectorAll('button[type="submit"]').forEach(button => { button.disabled = value; });
+function login(user) {
+  currentUser = user;
+  $('loginScreen').hidden = true;
+  $('passwordSetupScreen').hidden = true;
+  $('app').hidden = false;
+  $('userLabel').textContent = `${user.name} · ${user.role === 'admin' ? 'Administración' : 'Docente'}`;
+  $('adminView').hidden = user.role !== 'admin';
+  $('teacherView').hidden = user.role !== 'teacher';
 }
 
-async function refresh() {
-    if (!profile || refreshing) return;
-    refreshing = true;
-    try {
-        const nextProfile = await api.profile();
-        if (!nextProfile) throw new Error('Inicia sesión de nuevo.');
-        const nextState = await api.snapshot(nextProfile);
-        profile = nextProfile;
-        state = nextState;
-        render();
-        $('connectionStatus').textContent = 'Datos compartidos · Actualizado ' + stamp(new Date().toISOString());
-    } catch (error) {
-        $('connectionStatus').textContent = 'No se pudo actualizar · ' + errorText(error);
-        if (/desactivada|autorización|sesión/.test(error.message)) {
-            showLogin();
-        }
-    } finally {
-        refreshing = false;
+function mapEquipment(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    category: row.category || '',
+    model: row.model || '',
+    serial: row.serial,
+    code: row.code || '',
+    location: row.location || '',
+    status: row.status,
+    quantity: row.status === 'available' ? 1 : 0,
+    minimum: 0,
+  };
+}
+
+function mapRequest(row) {
+  return {
+    id: row.id,
+    productId: row.equipment_id,
+    productName: row.equipment_name,
+    productSerial: row.equipment_serial,
+    reason: row.reason,
+    quantity: 1,
+    teacher: row.teacher_name,
+    email: row.teacher_email,
+    requestedAt: row.created_at,
+    status: row.status,
+    approvedAt: row.status === 'approved' ? row.resolved_at : null,
+    deliveredAt: row.delivered_at,
+    deliveredBy: row.delivered_by,
+    dueAt: row.due_at,
+    returnedAt: row.returned_at,
+    returnedBy: row.returned_by,
+  };
+}
+
+async function refreshData() {
+  if (!currentUser) return;
+  const [equipmentResult, requestResult, profilesResult] = await Promise.all([
+    supabase.from('edu_equipment').select('*').order('name').order('serial'),
+    supabase.from('edu_requests').select('*').order('created_at'),
+    supabase.from('edu_profiles').select('id,email,name,role,active').order('name'),
+  ]);
+  for (const result of [equipmentResult, requestResult, profilesResult]) {
+    if (result.error) throw result.error;
+  }
+  const ownProfile = (profilesResult.data || []).find((profile) => profile.id === currentUser.id);
+  if (!ownProfile?.active || ownProfile.role !== currentUser.role) {
+    setLoggedOut('Tu cuenta fue desactivada. Contacta a administración.');
+    window.setTimeout(() => supabase.auth.signOut(), 0);
+    return;
+  }
+  currentUser = { ...currentUser, ...ownProfile };
+  products = (equipmentResult.data || []).filter((item) => item.status !== 'retired').map(mapEquipment);
+  requests = (requestResult.data || []).map(mapRequest);
+  accounts = profilesResult.data || [];
+  render();
+}
+
+async function loadAuthenticatedUser(user) {
+  if (!user || loadingUserId === user.id) return;
+  if (user.user_metadata?.password_setup_required) {
+    showPasswordSetup(user);
+    return;
+  }
+  loadingUserId = user.id;
+  try {
+    const { data: profile, error } = await supabase
+      .from('edu_profiles')
+      .select('id,email,name,role,active')
+      .eq('id', user.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!profile || !profile.active) {
+      setLoggedOut('Tu cuenta aún no está activa. Contacta a administración.');
+      window.setTimeout(() => supabase.auth.signOut(), 0);
+      return;
     }
+    if (!['admin', 'teacher'].includes(profile.role)) {
+      setLoggedOut('Esta cuenta no tiene un perfil autorizado para ingresar.');
+      window.setTimeout(() => supabase.auth.signOut(), 0);
+      return;
+    }
+    login({ ...profile, email: profile.email || user.email });
+    await refreshData();
+  } catch (error) {
+    setLoggedOut('No se pudo cargar la aplicación desde Supabase: ' + (error.message || 'Error de conexión.'));
+  } finally {
+    loadingUserId = null;
+  }
 }
 
-function showLogin() {
-    profile = null;
-    state = { equipment: [], requests: [], profiles: [] };
-    document.querySelectorAll('.modal-backdrop').forEach(modal => modal.classList.remove('open'));
-    $('app').hidden = true;
-    $('loginScreen').hidden = false;
-    $('password').value = '';
+function synchronizeData() {
+  if (currentUser) refreshData().catch((error) => toast(error.message || 'No se pudo actualizar la información.'));
 }
 
-async function enter() {
-    profile = await api.profile();
-    if (!profile) throw new Error('Inicia sesión para continuar.');
-    state = await api.snapshot(profile);
-    $('loginScreen').hidden = true;
-    $('app').hidden = false;
-    render();
-    $('connectionStatus').textContent = 'Conectado a la base compartida';
+function withInventoryWrite(role, operation, onError = (error) => toast(error.message || 'No se pudo guardar.')) {
+  if (!currentUser || currentUser.role !== role) return;
+  Promise.resolve().then(operation).catch(onError);
 }
+const escapeHtml = (value) =>
+  String(value).replace(
+    /[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+  );
+const loanDate = new Intl.DateTimeFormat('es-CR', {
+  dateStyle: 'short',
+  timeStyle: 'short',
+  timeZone: 'America/Costa_Rica',
+});
 
-function render() {
-    if (!profile) return;
-    const admin = profile.role === 'admin';
-    $('adminView').hidden = !admin;
-    $('teacherView').hidden = admin;
-    $('userLabel').textContent = `${profile.name} · ${admin ? 'Administración' : 'Docente'}`;
-    document.body.dataset.role = profile.role;
-    renderEquipment();
-    renderRequests();
-    if (admin) renderAccounts();
-}
-
-function matches(equipment, query) {
-    return [equipment.name, equipment.category, equipment.model, equipment.serial, equipment.code, equipment.location]
-        .some(value => String(value).toLocaleLowerCase('es').includes(query));
-}
-
-function renderEquipment() {
-    const adminQuery = $('adminSearch').value.trim().toLocaleLowerCase('es');
-    const adminItems = state.equipment.filter(item => matches(item, adminQuery));
-    const active = state.equipment.filter(item => item.status !== 'retired');
-    $('productCount').textContent = active.length;
-    $('unitCount').textContent = active.filter(item => item.status === 'available').length;
-    const pending = state.requests.filter(item => item.status === 'pending').length;
-    $('pendingCount').textContent = pending;
-    $('navPendingCount').textContent = pending;
-
-    $('productRows').innerHTML = adminItems.map(item => `
-        <tr>
-            <td><span class="table-primary">${escape(item.name)}</span><small class="table-secondary">${escape(item.category)}</small></td>
-            <td>${escape(item.model)}</td>
-            <td>${escape(item.serial)}</td>
-            <td>${escape(item.code)}<small class="table-secondary">${escape(item.location)}</small></td>
-            <td>${badge(item.status)}</td>
-            <td><div class="actions">
-                ${action('edit-equipment', item.id, 'Editar')}
-                ${item.status === 'retired' ? action('restore-equipment', item.id, 'Reactivar') : ''}
-                ${['available', 'maintenance'].includes(item.status) ? action('retire-equipment', item.id, 'Dar de baja', 'danger') : ''}
-            </div></td>
-        </tr>`).join('');
-    $('productEmpty').hidden = adminItems.length > 0;
-
-    const query = $('teacherSearch').value.trim().toLocaleLowerCase('es');
-    const catalog = state.equipment.filter(item => item.status !== 'retired' && matches(item, query));
-    $('catalog').innerHTML = catalog.map(item => {
-        const pending = state.requests.some(request =>
-            request.equipment_id === item.id && request.teacher_id === profile.id && request.status === 'pending');
-        return `<article class="catalog-card">
-            <div class="device-art" aria-hidden="true"><span>▣</span><small>${escape(item.category)}</small></div>
-            <div class="catalog-info">
-                <span class="eyebrow">${escape(item.category)}</span>
-                <h3>${escape(item.name)}</h3>
-                <p>${escape(item.model)}</p>
-                <p class="catalog-serial">Serie <strong>${escape(item.serial)}</strong></p>
-                <p>${escape(item.location)}</p>
-                ${badge(item.status)}
-            </div>
-            <button class="button" type="button" data-action="request" data-id="${item.id}"
-                ${item.status !== 'available' || pending ? 'disabled' : ''}>
-                ${pending ? 'Solicitud pendiente' : 'Solicitar'}
-            </button>
-        </article>`;
-    }).join('');
-    $('catalogEmpty').hidden = catalog.length > 0;
-}
-
-function requestDetails(request) {
-    return `<span class="table-primary">${escape(request.equipment_name)}</span>
-        <small class="table-secondary">Serie ${escape(request.equipment_serial)}</small>
-        <small class="table-secondary">${escape(request.reason)}</small>`;
+function dateLabel(value) {
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? loanDate.format(time) : '';
 }
 
 function loanStatus(request) {
-    const overdue = request.status === 'delivered' && Date.parse(request.due_at) < Date.now();
-    const timestamps = [
-        ['Entrega', request.delivered_at], ['Devolución prevista', request.due_at],
-        ['Devolución real', request.returned_at]
-    ];
-    return badge(overdue ? 'overdue' : request.status) + timestamps
-        .filter(([, value]) => value)
-        .map(([label, value]) => `<small class="table-secondary">${label}: ${stamp(value)}</small>`).join('');
+  const labels = {
+    pending: 'Pendiente',
+    approved: request.approvedAt ? 'Aprobada · por entregar' : 'Aprobada',
+    rejected: 'Rechazada',
+    delivered: 'En préstamo',
+    returned: 'Devuelta',
+    cancelled: 'Reserva cancelada',
+  };
+  const overdue = request.status === 'delivered' && Date.parse(request.dueAt) < Date.now();
+  const badge =
+    overdue || request.status === 'rejected'
+      ? 'low'
+      : ['pending', 'approved'].includes(request.status)
+        ? 'waiting'
+        : '';
+  const dates = [
+    ['Entrega', request.deliveredAt],
+    ['Devolución prevista', request.dueAt],
+    ['Devolución real', request.returnedAt],
+  ]
+    .map(([name, timestamp]) => {
+      const value = dateLabel(timestamp);
+      return value ? `<small class="table-secondary">${name}: ${escapeHtml(value)}</small>` : '';
+    })
+    .join('');
+  const label = overdue ? 'Vencida' : labels[request.status] || 'Sin estado';
+  return `<span class="badge ${badge}">${label}</span>${dates}`;
 }
 
-function renderRequests() {
-    const requests = [...state.requests].reverse();
-    $('adminRequestRows').innerHTML = requests.map(request => `
-        <tr>
-            <td>${escape(request.teacher_name)}<small class="table-secondary">${escape(request.teacher_email)}</small></td>
-            <td>${requestDetails(request)}</td>
-            <td>1</td>
-            <td>${stamp(request.created_at)}</td>
-            <td>${loanStatus(request)}</td>
-            <td><div class="actions">
-                ${request.status === 'pending' ? action('approve', request.id, 'Aprobar', '') + action('reject', request.id, 'Rechazar', 'danger') : ''}
-                ${request.status === 'approved' ? action('deliver', request.id, 'Registrar entrega') + action('cancel', request.id, 'Cancelar reserva', 'danger') : ''}
-                ${request.status === 'delivered' ? action('return', request.id, 'Registrar devolución') : ''}
-            </div></td>
-        </tr>`).join('');
-    $('requestEmpty').hidden = requests.length > 0;
-    const mine = requests.filter(request => request.teacher_id === profile.id);
-    $('teacherRequestRows').innerHTML = mine.map(request => `
-        <tr>
-            <td>${requestDetails(request)}</td><td>1</td><td>${stamp(request.created_at)}</td>
-            <td>${loanStatus(request)}
-                ${request.status === 'pending' ? action('cancel', request.id, 'Cancelar') : ''}
-            </td>
-        </tr>`).join('');
-    $('teacherRequestEmpty').hidden = mine.length > 0;
+function loanActions(request) {
+  const id = escapeHtml(request.id);
+  if (request.status === 'pending') {
+    return `<div class="actions">
+      <button class="button compact" data-loan-action="approve" data-loan-id="${id}">Aprobar</button>
+      <button class="button danger" data-loan-action="reject" data-loan-id="${id}">Rechazar</button>
+    </div>`;
+  }
+  if (request.status === 'approved' && request.approvedAt) {
+    return `<div class="actions">
+      <button class="button secondary" data-loan-action="deliver" data-loan-id="${id}">Registrar entrega</button>
+      <button class="button danger" data-loan-action="cancel" data-loan-id="${id}">Cancelar reserva</button>
+    </div>`;
+  }
+  if (canReturn(request)) {
+    return `<button class="button secondary" data-loan-action="return" data-loan-id="${id}">Registrar devolución</button>`;
+  }
+  return '—';
 }
 
-function renderAccounts() {
-    const teachers = state.profiles.filter(account => account.role === 'teacher');
-    $('teacherAccountRows').innerHTML = teachers.map(account => `
-        <tr><td>${escape(account.name)}</td><td>${escape(account.email)}</td>
-            <td>${account.active ? 'Activa' : 'Desactivada'}</td>
-            <td><div class="actions">
-                ${action('edit-account', account.id, 'Editar')}
-                ${action('toggle-account', account.id, account.active ? 'Desactivar' : 'Activar', account.active ? 'danger' : 'secondary')}
-                ${action('password-account', account.id, 'Contraseña temporal')}
-            </div></td>
-        </tr>`).join('');
-    $('teacherAccountEmpty').hidden = teachers.length > 0;
+function canReturn(request) {
+  // Las aprobaciones antiguas ya descontaban existencias y no tenían paso de entrega.
+  return request.status === 'delivered' || (request.status === 'approved' && !request.approvedAt);
 }
 
-function closeModal(id) {
-    $(id).classList.remove('open');
+function loanRow(request, isAdmin) {
+  const date = dateLabel(request.requestedAt) || request.date || '—';
+  const details = [
+    request.productSerial ? 'Serie: ' + request.productSerial : 'Serie sin registrar',
+    request.reason ? 'Motivo: ' + request.reason : '',
+  ].filter(Boolean).join(' · ');
+  return `<tr>
+    ${isAdmin ? `<td>${escapeHtml(request.teacher)}</td>` : ''}
+    <td>
+      <span class="table-primary">${escapeHtml(request.productName)}</span>
+      <small class="table-secondary">${escapeHtml(details)}</small>
+    </td>
+    <td>${escapeHtml(request.quantity)}</td>
+    <td>${escapeHtml(date)}</td>
+    <td>${loanStatus(request)}</td>
+    ${isAdmin ? `<td>${loanActions(request)}</td>` : ''}
+  </tr>`;
 }
 
-function openEquipment(equipment) {
-    $('productForm').reset();
-    $('productFormError').hidden = true;
-    $('productId').value = equipment?.id || '';
-    $('productModalTitle').textContent = equipment ? 'Editar equipo' : 'Registrar equipos';
-    $('productQuantityField').hidden = Boolean(equipment);
-    $('productQuantity').disabled = Boolean(equipment);
-    $('productQuantity').value = 1;
-    $('productAvailabilityField').hidden = !equipment;
-    $('productAvailability').textContent = equipment ? labels[equipment.status] : '';
-    $('equipmentCondition').disabled = !equipment || ['reserved', 'loaned', 'retired'].includes(equipment.status);
-    $('equipmentCondition').value = equipment?.status === 'maintenance' ? 'maintenance' : 'available';
-    const fields = { productName: 'name', productCategory: 'category', productModel: 'model',
-        productLocation: 'location', productSerial: 'serial', productCode: 'code' };
-    for (const [id, field] of Object.entries(fields)) $(id).value = equipment?.[field] || '';
-    updateBatch();
-    $('productBackdrop').classList.add('open');
+function toast(message) {
+  $('toast').textContent = message;
+  $('toast').classList.add('show');
+  setTimeout(() => $('toast').classList.remove('show'), 2400);
 }
-
-function updateBatch() {
-    const count = Number($('productQuantity').value);
-    const serials = $('productSerial').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
-    $('productSerialCount').textContent = `${serials.length} de ${count} series ingresadas`;
-    $('productSerial').rows = count > 1 ? 5 : 2;
-}
-
-async function submit(form, operation) {
-    if (busy) return;
-    setBusy(true);
-    const error = form.querySelector('[role="alert"]');
-    if (error) { error.textContent = ''; error.hidden = true; }
-    try {
-        await operation();
-    } catch (exception) {
-        if (error) {
-            error.textContent = errorText(exception);
-            error.hidden = false;
-        } else toast(errorText(exception));
-    } finally {
-        setBusy(false);
-    }
-}
-
-$('loginForm').addEventListener('submit', event => {
-    event.preventDefault();
-    submit(event.currentTarget, async () => {
-        await api.signIn($('email').value.trim(), $('password').value);
-        await enter();
+$('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('loginError').hidden = true;
+  try {
+    const { error } = await supabase.auth.signInWithPassword({
+      email: $('email').value.trim().toLowerCase(),
+      password: $('password').value,
     });
+    if (error) throw error;
+  } catch (error) {
+    $('loginError').textContent = 'No se pudo iniciar sesión: ' + (error.message || 'revisa el correo y la contraseña.');
+    $('loginError').hidden = false;
+  }
 });
-$('logoutBtn').addEventListener('click', async () => {
-    try {
-        await api.signOut();
-        showLogin();
-    } catch (error) { toast(errorText(error)); }
+$('forgotPasswordBtn').addEventListener('click', async () => {
+  const email = $('email').value.trim().toLowerCase();
+  const message = $('resetPasswordMessage');
+  message.hidden = true;
+  $('loginError').hidden = true;
+  if (!email) {
+    message.textContent = 'Escribe tu correo institucional para enviarte el enlace de recuperación.';
+    message.hidden = false;
+    return;
+  }
+  const recoveryUrl = new URL(window.location.href);
+  recoveryUrl.search = '';
+  recoveryUrl.hash = '';
+  const redirectTo = window.location.protocol === 'file:'
+    ? 'http://127.0.0.1:5500/index.html'
+    : recoveryUrl.href;
+  try {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+    if (error) throw error;
+    message.textContent = 'Si existe una cuenta con ese correo, recibirás un enlace para crear una contraseña nueva.';
+    message.hidden = false;
+  } catch (error) {
+    message.textContent = 'No se pudo enviar el enlace: ' + (error.message || 'inténtalo de nuevo.');
+    message.hidden = false;
+  }
 });
-$('refreshBtn').addEventListener('click', refresh);
-$('forgotPassword').addEventListener('click', async () => {
-    if (!$('email').reportValidity()) return;
-    try {
-        await api.recover($('email').value.trim());
-        toast('Si la cuenta existe, recibirás instrucciones en tu correo.');
-    } catch (error) { toast(errorText(error)); }
+$('passwordSetupForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const password = $('newPassword').value;
+  if (password !== $('confirmPassword').value) {
+    $('passwordSetupError').textContent = 'Las contraseñas no coinciden.';
+    $('passwordSetupError').hidden = false;
+    return;
+  }
+  if (!pendingPasswordUser) {
+    setLoggedOut('Vuelve a abrir el enlace de invitación desde tu correo.');
+    return;
+  }
+  $('passwordSetupError').hidden = true;
+  const { data, error } = await supabase.auth.updateUser({
+    password,
+    data: { ...pendingPasswordUser.user_metadata, password_setup_required: false },
+  });
+  if (error) {
+    $('passwordSetupError').textContent = error.message || 'No se pudo guardar la contraseña.';
+    $('passwordSetupError').hidden = false;
+    return;
+  }
+  pendingPasswordUser = null;
+  if (data.user) await loadAuthenticatedUser(data.user);
 });
-
-$('productForm').addEventListener('submit', event => {
-    event.preventDefault();
-    submit(event.currentTarget, async () => {
-        const count = Number($('productQuantity').value);
-        const id = $('productId').value;
-        const serials = $('productSerial').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
-        const codes = $('productCode').value.replace(/\r/g, '').split('\n').map(value => value.trim());
-        if (!Number.isSafeInteger(count) || count < 1 || count > 100 || serials.length !== count) {
-            throw new Error('Indica entre 1 y 100 equipos y una serie por equipo.');
-        }
-        if (codes.slice(count).some(Boolean)) throw new Error('Hay más códigos que equipos.');
-        const existing = state.equipment.find(item => item.id === id);
-        const items = serials.map((serial, index) => ({
-            id: id || null, serial, code: codes[index] || '',
-            name: $('productName').value.trim(), category: $('productCategory').value.trim(),
-            model: $('productModel').value.trim(), location: $('productLocation').value.trim(),
-            status: ['reserved', 'loaned'].includes(existing?.status) ? existing.status : $('equipmentCondition').value
-        }));
-        // El lote se valida y guarda en una única transacción en el servidor.
-        await api.rpc('edu_save_equipment', { p_items: items });
-        closeModal('productBackdrop');
-        toast('Equipos guardados.');
-        await refresh();
-    });
-});
-
-$('requestForm').addEventListener('submit', event => {
-    event.preventDefault();
-    submit(event.currentTarget, async () => {
-        await api.rpc('edu_request_equipment', {
-            p_equipment_id: $('requestProductId').value,
-            p_reason: $('requestReason').value.trim()
-        });
-        closeModal('requestBackdrop');
-        toast('Solicitud enviada a administración.');
-        await refresh();
-    });
-});
-
-$('deliveryForm').addEventListener('submit', event => {
-    event.preventDefault();
-    submit(event.currentTarget, async () => {
-        const due = new Date($('deliveryDueAt').value);
-        if (!Number.isFinite(due.getTime()) || due <= new Date()) {
-            throw new Error('La devolución prevista debe ser posterior a la entrega.');
-        }
-        await api.rpc('edu_resolve_request', {
-            p_id: $('deliveryRequestId').value, p_action: 'deliver', p_due_at: due.toISOString()
-        });
-        closeModal('deliveryBackdrop');
-        toast('Entrega registrada.');
-        await refresh();
-    });
-});
-
-function openAccount(account) {
-    $('teacherForm').reset();
-    $('teacherForm').querySelector('[role="alert"]').hidden = true;
-    $('teacherId').value = account?.id || '';
-    $('teacherModalTitle').textContent = account ? 'Editar docente' : 'Crear cuenta docente';
-    $('teacherName').value = account?.name || '';
-    $('teacherEmail').value = account?.email || '';
-    $('teacherEmail').disabled = Boolean(account);
-    $('teacherPassword').required = !account;
-    $('teacherPasswordField').hidden = Boolean(account);
-    $('teacherBackdrop').classList.add('open');
+async function logout() {
+  await supabase.auth.signOut();
+  setLoggedOut();
+  document.querySelectorAll('.modal-backdrop').forEach((modal) => modal.classList.remove('open'));
 }
 
-$('teacherForm').addEventListener('submit', event => {
-    event.preventDefault();
-    submit(event.currentTarget, async () => {
-        const id = $('teacherId').value;
-        if (id) {
-            const account = state.profiles.find(item => item.id === id);
-            await api.rpc('edu_manage_teacher', {
-                p_id: id, p_name: $('teacherName').value.trim(), p_active: account.active
-            });
-        } else {
-            await api.account({
-                action: 'create', name: $('teacherName').value.trim(),
-                email: $('teacherEmail').value.trim(), password: $('teacherPassword').value
-            });
-        }
-        $('teacherPassword').value = '';
-        closeModal('teacherBackdrop');
-        toast('Cuenta guardada.');
-        await refresh();
-    });
-});
-
-function openPassword(account = null) {
-    resetPasswordFor = account;
-    $('passwordForm').reset();
-    $('passwordForm').querySelector('[role="alert"]').hidden = true;
-    $('passwordModalTitle').textContent = account ? 'Contraseña temporal del docente' : 'Cambiar mi contraseña';
-    $('passwordBackdrop').classList.add('open');
+$('logoutBtn').addEventListener('click', logout);
+function render() {
+  renderAdmin();
+  renderTeacher();
 }
-$('myPasswordBtn').addEventListener('click', () => openPassword());
-$('passwordForm').addEventListener('submit', event => {
-    event.preventDefault();
-    submit(event.currentTarget, async () => {
-        const password = $('newPassword').value;
-        if (password !== $('confirmPassword').value) throw new Error('Las contraseñas no coinciden.');
-        if (resetPasswordFor) await api.account({ action: 'password', id: resetPasswordFor.id, password });
-        else await api.changePassword(password);
-        recovery = false;
-        closeModal('passwordBackdrop');
-        $('passwordForm').reset();
-        toast('Contraseña actualizada.');
-        if (!profile) await enter();
-    });
-});
+function renderAdmin() {
+  const q = $('adminSearch').value.trim().toLowerCase();
+  const filtered = products.filter((p) =>
+    `${p.name} ${p.category} ${p.model || ''} ${p.serial || ''} ${p.code || ''} ${p.location || ''}`
+      .toLowerCase()
+      .includes(q),
+  );
+  $('productCount').textContent = products.length;
+  $('unitCount').textContent = products.reduce((n, p) => n + Number(p.quantity), 0);
+  const pending = requests.filter((r) => r.status === 'pending').length;
+  $('pendingCount').textContent = pending;
+  $('navPendingCount').textContent = pending;
+  $('productRows').innerHTML = filtered
+    .map(
+      (p) =>
+        `<tr>
+          <td>
+          <span class="table-primary">${escapeHtml(p.name)}</span>
+          <small class="table-secondary">${escapeHtml(p.category || 'Sin categoría')}</small>
+          </td>
+          <td>${escapeHtml(p.model || '—')}</td>
+          <td>
+          <span class="serial-value">${escapeHtml(p.serial || 'Sin serie')}</span>
+          </td>
+          <td>
+          <span class="table-primary">${escapeHtml(p.code || 'Sin código')}</span>
+          <small class="table-secondary">${escapeHtml(p.location || 'Sin ubicación')}</small>
+          </td>
+          <td>
+          <span class="badge ${p.status === 'available' ? '' : 'low'}">${escapeHtml({ available: 'Disponible', reserved: 'Reservado', loaned: 'En préstamo', maintenance: 'En mantenimiento' }[p.status] || 'No disponible')}</span>
+          </td>
+          <td>
+          <div class="actions">
+          <button class="icon-button" aria-label="Editar ${escapeHtml(p.name)}" title="Editar" data-edit="${p.id}">✎</button>
+          ${['available', 'maintenance'].includes(p.status) ? `<button class="icon-button" aria-label="${p.status === 'available' ? 'Enviar a mantenimiento' : 'Marcar disponible'}: ${escapeHtml(p.name)}" title="${p.status === 'available' ? 'Enviar a mantenimiento' : 'Marcar disponible'}" data-set-status="${p.status === 'available' ? 'maintenance' : 'available'}" data-equipment-id="${p.id}">${p.status === 'available' ? '⚒' : '✓'}</button>` : ''}
+          <button class="icon-button danger" aria-label="Retirar ${escapeHtml(p.name)}" title="Retirar del inventario" data-delete="${p.id}">⋯</button>
+          </div>
+          </td>
+          </tr>`,
+    )
+    .join('');
+  $('productEmpty').hidden = filtered.length > 0;
+  $('productRows').closest('table').hidden = !filtered.length;
+  const rows = requests.slice().reverse();
+  $('adminRequestRows').innerHTML = rows.map((request) => loanRow(request, true)).join('');
+  $('requestEmpty').hidden = rows.length > 0;
+  $('adminRequestRows').closest('table').hidden = !rows.length;
+  const teachers = accounts.filter((account) => account.role === 'teacher');
+  $('teacherAccountRows').innerHTML = teachers
+    .map(
+      (account) =>
+        `<tr>
+          <td class="product">${escapeHtml(account.name)}</td>
+          <td>${escapeHtml(account.email)}</td>
+          <td>Docente</td>
+          <td>
+          ${account.active ? 'Activa' : 'Pendiente / inactiva'}
+          </td>
+          <td>
+          <button type="button" class="button ${account.active ? 'danger' : 'secondary'}" data-toggle-teacher="${account.id}" aria-label="${account.active ? 'Desactivar' : 'Activar'} cuenta de ${escapeHtml(account.name)}">${account.active ? 'Desactivar' : 'Activar'}</button>
+          </td>
+          </tr>`,
+    )
+    .join('');
+  $('teacherAccountEmpty').hidden = teachers.length > 0;
+  $('teacherAccountRows').closest('table').hidden = !teachers.length;
+}
+function renderTeacher() {
+  const q = $('teacherSearch').value.trim().toLowerCase();
+  const filtered = products.filter((p) => p.status === 'available').filter((p) =>
+    `${p.name} ${p.category} ${p.model || ''} ${p.serial || ''} ${p.location || ''}`
+      .toLowerCase()
+      .includes(q),
+  );
+  $('catalog').innerHTML = filtered
+    .map(
+      (p) =>
+        `<article class="catalog-card">
+          <div class="device-art" aria-hidden="true">
+          <span>▣</span>
+          <small>${escapeHtml(p.category || 'EQUIPO')}</small>
+          </div>
+          <div class="catalog-info">
+          <span class="eyebrow">${escapeHtml(p.category || 'Equipo')}</span>
+          <h3>${escapeHtml(p.name)}</h3>
+          <p class="catalog-model">${escapeHtml(p.model || 'Modelo no especificado')}</p>
+          <p class="catalog-serial">Serie <strong>${escapeHtml(p.serial || 'No registrada')}</strong>
+          </p>
+          <p class="stock">Disponible · Serie ${escapeHtml(p.serial)}</p>
+          </div>
+          <button class="button" data-request="${p.id}" ${Number(p.quantity) < 1 ? 'disabled' : ''}>Solicitar</button>
+          </article>`,
+    )
+    .join('');
+  $('catalogEmpty').hidden = filtered.length > 0;
+  const mine = requests
+    .filter((r) => r.email === currentUser?.email)
+    .slice()
+    .reverse();
+  $('teacherRequestRows').innerHTML = mine.map((request) => loanRow(request, false)).join('');
+  $('teacherRequestEmpty').hidden = mine.length > 0;
+  $('teacherRequestRows').closest('table').hidden = !mine.length;
+}
+// El formulario registra lotes; el inventario conserva una ficha por dispositivo.
+const splitSerials = (text) =>
+  text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+const normalizeSerial = (serial) =>
+  String(serial || '')
+    .trim()
+    .toUpperCase();
 
-document.addEventListener('click', async event => {
-    const button = event.target.closest('[data-action]');
-    if (!button || busy || !profile) return;
-    const { action: command, id } = button.dataset;
-    const equipment = state.equipment.find(item => item.id === id);
-    const account = state.profiles.find(item => item.id === id);
-    if (command === 'edit-equipment') return openEquipment(equipment);
-    if (command === 'edit-account') return openAccount(account);
-    if (command === 'password-account') return openPassword(account);
-    if (command === 'deliver') {
-        const request = state.requests.find(item => item.id === id);
-        if (!request || request.status !== 'approved') return;
-        $('deliveryForm').reset();
-        $('deliveryForm').querySelector('[role="alert"]').hidden = true;
-        $('deliveryRequestId').value = id;
-        $('deliveryInfo').textContent = `${request.equipment_name} · ${request.teacher_name}`;
-        $('deliveryBackdrop').classList.add('open');
-        return;
-    }
-    if (command === 'request') {
-        $('requestForm').reset();
-        $('requestForm').querySelector('[role="alert"]').hidden = true;
-        $('requestProductId').value = id;
-        $('requestQuantity').value = 1;
-        $('requestProductInfo').textContent = `${equipment.name} · Serie ${equipment.serial}`;
-        $('requestBackdrop').classList.add('open');
-        return;
-    }
-    const confirmations = {
-        approve: '¿Aprobar el préstamo de este equipo?',
-        reject: '¿Rechazar la solicitud?',
-        return: '¿Confirmas la recepción del equipo en condiciones de volver a prestarse?',
-        cancel: '¿Cancelar tu solicitud?',
-        'retire-equipment': '¿Dar de baja el equipo? Se conservará el historial.',
-        'restore-equipment': '¿Reactivar el equipo como disponible?',
-        'toggle-account': account?.active ? '¿Desactivar la cuenta y cancelar sus solicitudes pendientes?' : '¿Activar esta cuenta?'
+function productFormError(message) {
+  $('productFormError').textContent = message;
+  $('productFormError').hidden = false;
+  $('productFormError').focus();
+}
+
+function updateProductBatchFields() {
+  const count = Number($('productQuantity').value);
+  const validCount = Number.isSafeInteger(count) && count > 0;
+  const entered = splitSerials($('productSerial').value).length;
+  const multiple = validCount && count > 1;
+  $('productSerialLabel').textContent = multiple
+    ? 'Números de serie · uno por equipo'
+    : 'Número de serie';
+  $('productCodeLabel').textContent = multiple
+    ? 'Códigos internos (opcionales)'
+    : 'Código interno (opcional)';
+  $('productSerial').rows = multiple ? 5 : 2;
+  $('productCode').rows = multiple ? 3 : 2;
+  $('productSerial').placeholder = multiple ? 'JBL-001\nJBL-002\nJBL-003' : 'Ej. JBL-001';
+  $('productSerialCount').textContent = validCount
+    ? entered + ' de ' + count + ' series ingresadas'
+    : 'Indica una cantidad entera mayor que cero.';
+  $('productSerialCount').classList.toggle('complete', validCount && entered === count);
+  $('productSaveBtn').textContent = multiple ? 'Guardar ' + count + ' equipos' : 'Guardar equipo';
+}
+
+function openProduct(product) {
+  $('productForm').reset();
+  $('productFormError').hidden = true;
+  $('productId').value = product?.id || '';
+  const individual = Boolean(product && Number(product.quantity) <= 1);
+  $('productModalTitle').textContent = product ? 'Editar ficha del equipo' : 'Registrar equipos';
+  $('productQuantityField').hidden = individual;
+  $('productQuantity').disabled = Boolean(product);
+  $('productQuantity').value = individual ? 1 : product?.quantity || 1;
+  $('productAvailabilityField').hidden = !individual;
+  $('productAvailability').textContent =
+    Number(product?.quantity) > 0 ? 'Disponible' : 'No disponible';
+  $('productFormHint').textContent = individual
+    ? 'Esta ficha identifica un solo dispositivo. Usa Registrar equipo para agregar más equipos con sus propias series.'
+    : product
+      ? 'Completa una serie por equipo para separar este registro agrupado en fichas individuales.'
+      : 'Registra varios equipos juntos. Cada número de serie creará una ficha individual.';
+  if (product) {
+    $('productName').value = product.name || '';
+    $('productCategory').value = product.category || '';
+    $('productModel').value = product.model || '';
+    $('productSerial').value = product.serial || '';
+    $('productCode').value = product.code || '';
+    $('productLocation').value = product.location || '';
+  }
+  updateProductBatchFields();
+  $('productBackdrop').classList.add('open');
+}
+
+function buildProductBatch(draft, inventory, history, makeId) {
+  const existing = draft.id ? inventory.find((item) => item.id === draft.id) : null;
+  if (draft.id && !existing)
+    throw new Error('El registro ya no existe. Cierra el formulario y vuelve a abrirlo.');
+  const individual = existing && Number(existing.quantity) <= 1;
+  const count = existing ? (individual ? 1 : Number(existing.quantity)) : Number(draft.count);
+  if (!Number.isSafeInteger(count) || count < 1)
+    throw new Error('Indica una cantidad entera mayor que cero.');
+  if (count > 100) throw new Error('Puedes registrar hasta 100 equipos por lote.');
+  if (!draft.name.trim()) throw new Error('Escribe el nombre del equipo.');
+  const serials = splitSerials(draft.serialText);
+  if (serials.length !== count) {
+    throw new Error(
+      'Para registrar ' +
+        count +
+        ' equipos necesitas ' +
+        count +
+        ' series distintas, una por línea. Has ingresado ' +
+        serials.length +
+        '.',
+    );
+  }
+  const seen = new Set();
+  const used = new Set(
+    inventory
+      .filter((item) => item.id !== draft.id)
+      .map((item) => normalizeSerial(item.serial))
+      .filter(Boolean),
+  );
+  for (const serial of serials) {
+    if (serial.length > 80)
+      throw new Error('Cada número de serie puede tener hasta 80 caracteres.');
+    const key = normalizeSerial(serial);
+    if (seen.has(key)) throw new Error('La serie ' + serial + ' está repetida en la lista.');
+    if (used.has(key))
+      throw new Error('La serie ' + serial + ' ya está registrada en el inventario.');
+    seen.add(key);
+  }
+  // Una ficha agrupada con historial requiere conciliar sus equipos antes de dividirla.
+  const linked = existing && history.some((request) => request.productId === existing.id);
+  if (linked && !individual) {
+    throw new Error(
+      'Este registro agrupado tiene solicitudes asociadas. Es necesario revisar esas solicitudes antes de separarlo, para conservar su historial.',
+    );
+  }
+  if (
+    linked &&
+    normalizeSerial(existing.serial) &&
+    normalizeSerial(existing.serial) !== normalizeSerial(serials[0])
+  ) {
+    throw new Error(
+      'Este equipo ya tiene solicitudes. Conserva su número de serie para mantener la identificación del préstamo.',
+    );
+  }
+  const codes = draft.codeText
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) => line.trim());
+  if (codes.slice(count).some(Boolean))
+    throw new Error('Hay más códigos internos que equipos. Revisa el orden de las líneas.');
+  if (codes.some((code) => code.length > 40))
+    throw new Error('Cada código interno puede tener hasta 40 caracteres.');
+  const items = serials.map((serial, index) => ({
+    ...(index === 0 && existing ? existing : {}),
+    id: index === 0 && existing ? existing.id : makeId(),
+    name: draft.name.trim(),
+    category: draft.category.trim(),
+    model: draft.model.trim(),
+    serial,
+    code: codes[index] || '',
+    location: draft.location.trim(),
+    quantity: individual ? Number(existing.quantity) : 1,
+    minimum: 0,
+    status: existing?.status || 'available',
+  }));
+  const nextProducts = inventory.slice();
+  if (existing) {
+    const index = nextProducts.findIndex((item) => item.id === existing.id);
+    nextProducts.splice(index, 1);
+    return {
+      items,
+      products: nextProducts.slice(0, index).concat(items, nextProducts.slice(index)),
     };
-    if (!confirm(confirmations[command] || '¿Confirmar la operación?')) return;
-    setBusy(true);
-    try {
-        if (['approve', 'reject', 'return', 'cancel'].includes(command)) {
-            await api.rpc('edu_resolve_request', { p_id: id, p_action: command });
-        } else if (['retire-equipment', 'restore-equipment'].includes(command)) {
-            await api.rpc('edu_set_equipment_status', {
-                p_id: id, p_status: command === 'retire-equipment' ? 'retired' : 'available'
-            });
-        } else if (command === 'toggle-account') {
-            await api.rpc('edu_manage_teacher', { p_id: id, p_name: account.name, p_active: !account.active });
-        }
-        toast('Cambio guardado en la base compartida.');
-        await refresh();
-    } catch (error) {
-        toast(errorText(error));
-        await refresh();
-    } finally { setBusy(false); }
-});
-
-document.querySelectorAll('.add-product-btn').forEach(button => button.addEventListener('click', () => openEquipment()));
-$('addTeacherBtn').addEventListener('click', () => openAccount());
-document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => {
-    if (!busy && !(recovery && button.dataset.close === 'passwordBackdrop')) closeModal(button.dataset.close);
-}));
-document.querySelectorAll('.modal-backdrop').forEach(modal => modal.addEventListener('click', event => {
-    if (event.target === modal && !busy && !recovery) closeModal(modal.id);
-}));
-$('productQuantity').addEventListener('input', updateBatch);
-$('productSerial').addEventListener('input', updateBatch);
-$('adminSearch').addEventListener('input', renderEquipment);
-$('teacherSearch').addEventListener('input', renderEquipment);
-window.addEventListener('focus', refresh);
-setInterval(() => { if (!document.hidden && !busy) refresh(); }, 3000);
-api.client.auth.onAuthStateChange(event => {
-    if (event === 'SIGNED_OUT') showLogin();
-    if (event === 'PASSWORD_RECOVERY') {
-        recovery = true;
-        openPassword();
-    }
-});
-
-async function start() {
-    try {
-        if (await api.session()) {
-            if (!recovery) await enter();
-        }
-    } catch (error) {
-        $('loginError').textContent = errorText(error);
-        $('loginError').hidden = false;
-    }
+  }
+  return { items, products: items.concat(nextProducts) };
 }
-start();
+function closeModal(id) {
+  $(id).classList.remove('open');
+}
+document
+  .querySelectorAll('.add-product-btn')
+  .forEach((btn) => btn.addEventListener('click', () => openProduct()));
+$('addTeacherBtn').addEventListener('click', () => {
+  $('teacherForm').reset();
+  $('teacherBackdrop').classList.add('open');
+});
+document
+  .querySelectorAll('[data-close]')
+  .forEach((btn) => btn.addEventListener('click', () => closeModal(btn.dataset.close)));
+document.querySelectorAll('.modal-backdrop').forEach((modal) =>
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeModal(modal.id);
+  }),
+);
+$('productQuantity').addEventListener('input', updateProductBatchFields);
+$('productSerial').addEventListener('input', updateProductBatchFields);
+$('productForm').addEventListener('input', () => {
+  $('productFormError').hidden = true;
+});
+$('productForm').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const draft = {
+    id: $('productId').value,
+    count: $('productQuantity').value,
+    name: $('productName').value,
+    category: $('productCategory').value,
+    model: $('productModel').value,
+    serialText: $('productSerial').value,
+    codeText: $('productCode').value,
+    location: $('productLocation').value,
+  };
+  withInventoryWrite('admin', async () => {
+    const batch = buildProductBatch(draft, products, requests, () => crypto.randomUUID());
+    const items = batch.items.map((item) => {
+      const payload = {
+        name: item.name,
+        category: item.category,
+        model: item.model,
+        serial: item.serial,
+        code: item.code,
+        location: item.location,
+        status: item.status || 'available',
+      };
+      if (products.some((product) => product.id === item.id)) payload.id = item.id;
+      return payload;
+    });
+    const { error } = await supabase.rpc('edu_save_equipment', { p_items: items });
+    if (error) throw error;
+    await refreshData();
+    closeModal('productBackdrop');
+    toast(items.length > 1 ? `${items.length} equipos guardados, cada uno con su serie.` : 'Equipo guardado.');
+  }, (error) => productFormError(error.message || 'No se pudo guardar el lote.'));
+});
+
+$('teacherForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const email = $('teacherEmail').value.trim().toLowerCase();
+  if (currentUser?.role !== 'admin') return;
+  if (accounts.some((account) => account.email.toLowerCase() === email)) {
+    toast('Ya existe una cuenta con ese correo.');
+    return;
+  }
+  const name = $('teacherName').value.trim();
+  if (!name) {
+    toast('Escribe el nombre del docente.');
+    return;
+  }
+  withInventoryWrite('admin', async () => {
+    const { data, error } = await supabase.functions.invoke('invite-teacher', { body: { email, name } });
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+    await refreshData();
+    closeModal('teacherBackdrop');
+    toast('Invitación enviada. La cuenta aparecerá como inactiva hasta que administración la active.');
+  });
+});
+$('teacherAccountRows').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-toggle-teacher]');
+  if (!button || currentUser?.role !== 'admin') return;
+
+  const account = accounts.find((item) => item.id === button.dataset.toggleTeacher);
+  if (!account || account.role !== 'teacher') return;
+  const active = !account.active;
+  if (!active && !confirm(`¿Desactivar la cuenta de ${account.name}? Las solicitudes pendientes se cancelarán.`)) return;
+  withInventoryWrite('admin', async () => {
+    const { error } = await supabase.rpc('edu_manage_teacher', {
+      p_id: account.id,
+      p_name: account.name,
+      p_active: active,
+    });
+    if (error) throw error;
+    await refreshData();
+    toast(active ? 'Cuenta docente activada.' : 'Cuenta docente desactivada.');
+  });
+});
+$('productRows').addEventListener('click', (event) => {
+  if (currentUser?.role !== 'admin') return;
+  const edit = event.target.closest('[data-edit]');
+  const remove = event.target.closest('[data-delete]');
+  const setStatus = event.target.closest('[data-set-status]');
+  if (edit) {
+    const product = products.find((item) => item.id === edit.dataset.edit);
+    if (product) openProduct(product);
+  }
+  if (setStatus) {
+    const product = products.find((item) => item.id === setStatus.dataset.equipmentId);
+    if (!product) return;
+    const nextStatus = setStatus.dataset.setStatus;
+    const hasPendingRequest = requests.some((request) => request.productId === product.id && request.status === 'pending');
+    const warning = nextStatus === 'maintenance' && hasPendingRequest
+      ? ' Las solicitudes pendientes para este equipo se cancelarán.'
+      : '';
+    if (!confirm(`${nextStatus === 'maintenance' ? 'Enviar a mantenimiento' : 'Marcar disponible'} ${product.name}?${warning}`)) return;
+    withInventoryWrite('admin', async () => {
+      const { error } = await supabase.rpc('edu_set_equipment_status', {
+        p_id: product.id,
+        p_status: nextStatus,
+      });
+      if (error) throw error;
+      await refreshData();
+      toast(nextStatus === 'maintenance' ? 'Equipo enviado a mantenimiento.' : 'Equipo marcado como disponible.');
+    });
+    return;
+  }
+  if (!remove) return;
+  const id = remove.dataset.delete;
+  const product = products.find((item) => item.id === id);
+  if (!product || !confirm(`¿Retirar ${product.name} del inventario? El historial de solicitudes se conservará.`)) return;
+  withInventoryWrite('admin', async () => {
+    const active = requests.some(
+      (request) =>
+        request.productId === id && ['pending', 'approved', 'delivered'].includes(request.status),
+    );
+    if (active)
+      throw new Error(
+        'Resuelve las solicitudes y préstamos activos antes de eliminar este equipo.',
+      );
+    const { error } = await supabase.rpc('edu_set_equipment_status', {
+      p_id: id,
+      p_status: 'retired',
+    });
+    if (error) throw error;
+    await refreshData();
+    toast('Equipo retirado del inventario. Su historial se conserva.');
+  });
+});
+
+function updateLoan(id, action, dueAt) {
+  withInventoryWrite('admin', async () => {
+    const request = requests.find((item) => item.id === id);
+    if (!request) throw new Error('La solicitud ya no está disponible.');
+    const reserved = request.status === 'approved' && request.approvedAt;
+    const allowed = {
+      approve: request.status === 'pending',
+      reject: request.status === 'pending',
+      deliver: reserved,
+      cancel: reserved,
+      return: canReturn(request),
+    };
+    if (!allowed[action]) throw new Error('Esta solicitud ya fue actualizada.');
+    if (action === 'deliver' && (!Number.isFinite(dueAt?.getTime()) || dueAt <= new Date())) {
+      throw new Error('La devolución prevista debe ser posterior a la entrega.');
+    }
+    const { error } = await supabase.rpc('edu_resolve_request', {
+      p_id: id,
+      p_action: action,
+      p_due_at: action === 'deliver' ? dueAt.toISOString() : null,
+    });
+    if (error) throw error;
+    await refreshData();
+    if (action === 'deliver') closeModal('deliveryBackdrop');
+    toast(
+      {
+        approve: 'Equipo reservado.',
+        reject: 'Solicitud rechazada.',
+        deliver: 'Entrega registrada.',
+        cancel: 'Reserva cancelada. El equipo vuelve a estar disponible.',
+        return: 'Devolución registrada. El equipo vuelve a estar disponible.',
+      }[action],
+    );
+  });
+}
+
+$('catalog').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-request]');
+  if (!btn) return;
+  const item = products.find((p) => p.id === btn.dataset.request);
+  if (!item) return;
+  $('requestForm').reset();
+  $('requestProductId').value = item.id;
+  $('requestProductInfo').textContent =
+    `${item.name}${item.model ? ` · ${item.model}` : ''}${item.serial ? ` · Serie ${item.serial}` : ''}`;
+  $('requestBackdrop').classList.add('open');
+});
+$('requestForm').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const id = $('requestProductId').value;
+  const reason = $('requestReason').value.trim();
+  withInventoryWrite('teacher', async () => {
+    const item = products.find((product) => product.id === id);
+    if (!item || item.status !== 'available') throw new Error('Este equipo ya no está disponible.');
+    if (!reason) throw new Error('Indica el motivo de la solicitud.');
+    const duplicate = requests.some(
+      (request) =>
+        request.productId === id &&
+        request.email === currentUser.email &&
+        request.status === 'pending',
+    );
+    if (duplicate) throw new Error('Ya tienes una solicitud pendiente para este equipo.');
+    const { error } = await supabase.rpc('edu_request_equipment', {
+      p_equipment_id: item.id,
+      p_reason: reason,
+    });
+    if (error) throw error;
+    await refreshData();
+    closeModal('requestBackdrop');
+    toast('Solicitud enviada a administración.');
+  });
+});
+
+$('adminSearch').addEventListener('input', renderAdmin);
+$('teacherSearch').addEventListener('input', renderTeacher);
+$('adminRequestRows').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-loan-action]');
+  if (!button || currentUser?.role !== 'admin') return;
+  const id = button.dataset.loanId;
+  const action = button.dataset.loanAction;
+  const request = requests.find((item) => item.id === id);
+  if (!request) return;
+  if (action === 'deliver') {
+    $('deliveryForm').reset();
+    $('deliveryRequestId').value = id;
+    $('deliveryInfo').textContent = [request.productName, request.productSerial, request.teacher]
+      .filter(Boolean)
+      .join(' · ');
+    $('deliveryBackdrop').classList.add('open');
+    $('deliveryDueAt').focus();
+    return;
+  }
+  if (action === 'return' && !confirm(`¿Confirmas que recibiste ${request.productName}?`)) return;
+  if (action === 'cancel' && !confirm(`¿Cancelar la reserva de ${request.productName}?`)) return;
+  updateLoan(id, action);
+});
+
+$('deliveryForm').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const dueAt = new Date($('deliveryDueAt').value + ':00-06:00');
+  updateLoan($('deliveryRequestId').value, 'deliver', dueAt);
+});
+
+document.querySelectorAll('.section-nav a').forEach((link) =>
+  link.addEventListener('click', () => {
+    link
+      .closest('.section-nav')
+      .querySelectorAll('a')
+      .forEach((item) => item.classList.remove('active'));
+    link.classList.add('active');
+  }),
+);
+supabase.auth.onAuthStateChange((event, session) => {
+  if (session?.user) {
+    if (event === 'PASSWORD_RECOVERY') {
+      window.setTimeout(() => showPasswordSetup(session.user, 'recovery'), 0);
+      return;
+    }
+    window.setTimeout(() => loadAuthenticatedUser(session.user), 0);
+  } else if (event === 'SIGNED_OUT' && currentUser) {
+    setLoggedOut();
+  } else if (event === 'INITIAL_SESSION') {
+    setLoggedOut();
+  }
+});
+
+window.addEventListener('focus', synchronizeData);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') synchronizeData();
+});
+window.setInterval(() => {
+  if (currentUser) synchronizeData();
+}, 20000);

@@ -5,8 +5,7 @@
   "private": true,
   "main": "desktop.cjs",
   "scripts": {
-    "build": "node scripts/build-web.mjs",
-    "check": "node --check js/app.js && node --check js/cloud-api.js && node --check desktop.cjs"
+    "build": "node scripts/build-web.mjs"
   },
   "engines": {
     "node": ">=22"

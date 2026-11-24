@@ -6,9 +6,34 @@
     <title>Educología | Inventario</title>
     <link rel="stylesheet" href="css/estilos.css" />
     <script src="js/vendor/supabase.js"></script>
-    <script type="module" src="js/app.js"></script>
+    <script src="js/supabase-config.js" defer></script>
+    <script src="js/app.js" defer></script>
   </head>
   <body>
+    <section class="login-screen" id="passwordSetupScreen" hidden>
+      <div class="login-layout">
+        <aside class="login-story">
+          <div class="story-brand"><span class="brand-mark">E</span><span>EDUCOLOGÍA</span></div>
+          <div class="story-copy">
+            <p class="story-kicker">Universidad Nacional · Educología</p>
+            <h2>Activa tu acceso<br />al inventario.</h2>
+            <p>Configura una contraseña personal para continuar.</p>
+          </div>
+        </aside>
+        <form class="login-card" id="passwordSetupForm">
+          <p class="eyebrow">Primer ingreso</p>
+          <h1>Configura tu contraseña</h1>
+          <p class="login-intro" id="passwordSetupEmail"></p>
+          <label for="newPassword">Nueva contraseña</label>
+          <input id="newPassword" type="password" autocomplete="new-password" minlength="10" required />
+          <label for="confirmPassword">Confirma la contraseña</label>
+          <input id="confirmPassword" type="password" autocomplete="new-password" minlength="10" required />
+          <p class="login-error" id="passwordSetupError" role="alert" hidden></p>
+          <button class="button login-button" type="submit">Guardar contraseña <span aria-hidden="true">→</span></button>
+        </form>
+      </div>
+    </section>
+
     <section class="login-screen" id="loginScreen">
       <div class="login-layout">
         <aside class="login-story">
@@ -64,10 +89,11 @@
           <p class="login-error" id="loginError" role="alert" hidden>
             Correo o contraseña incorrectos.
           </p>
+          <button class="login-link" id="forgotPasswordBtn" type="button">¿Olvidaste tu contraseña?</button>
+          <p class="login-message" id="resetPasswordMessage" role="status" hidden></p>
           <button class="button login-button" type="submit">
             Iniciar sesión <span aria-hidden="true">→</span>
           </button>
-          <button type="button" class="button secondary" id="forgotPassword">Olvidé mi contraseña</button>
           <p class="login-footnote">Acceso exclusivo para personal autorizado</p>
         </form>
       </div>
@@ -83,12 +109,12 @@
           </div>
         </div>
         <div class="user-tools">
-          <span id="userLabel"></span><button id="myPasswordBtn" type="button" class="button secondary">Mi contraseña</button><button id="logoutBtn" class="button secondary">Cerrar sesión</button>
+          <span id="userLabel"></span
+          ><button id="logoutBtn" class="button secondary">Cerrar sesión</button>
         </div>
       </header>
 
       <main class="shell">
-<div class="toolbar"><p id="connectionStatus" role="status">Conectando…</p><button type="button" id="refreshBtn" class="button secondary">Actualizar</button></div>
         <section id="adminView" hidden>
           <header class="page-heading">
             <div>
@@ -190,7 +216,7 @@
                 <h2>Cuentas docentes</h2>
               </div>
               <button class="button secondary" id="addTeacherBtn">
-                <span aria-hidden="true">＋</span> Crear cuenta
+                <span aria-hidden="true">＋</span> Invitar docente
               </button>
             </div>
             <div class="table-wrap">
@@ -200,6 +226,7 @@
                     <th>Docente</th>
                     <th>Correo institucional</th>
                     <th>Tipo de acceso</th>
+                    <th>Estado</th>
                     <th>Acciones</th>
                   </tr>
                 </thead>
@@ -264,7 +291,9 @@
             </div>
           </section>
         </section>
-        <p class="demo-note">Educología / UNA · Inventario y préstamos compartidos</p>
+        <p class="demo-note">
+          Inventario y solicitudes sincronizados con el servidor institucional.
+        </p>
       </main>
     </div>
 
@@ -321,7 +350,7 @@
               Indica cuántos equipos vas a registrar y escribe una serie distinta para cada uno.
             </p>
           </div>
-          <div class="field"><label for="equipmentCondition">Condición</label><select id="equipmentCondition"><option value="available">Disponible</option><option value="maintenance">En mantenimiento</option></select></div><div class="field full" id="productAvailabilityField" hidden>
+          <div class="field full" id="productAvailabilityField" hidden>
             <label>Disponibilidad actual</label>
             <p class="availability-note" id="productAvailability"></p>
           </div>
@@ -378,7 +407,6 @@
       aria-labelledby="requestModalTitle"
     >
       <form class="modal" id="requestForm">
-<div class="field"><label for="requestReason">Motivo del préstamo</label><textarea id="requestReason" required maxlength="500" rows="3"></textarea></div><p class="form-error" role="alert" hidden></p>
         <div class="modal-head">
           <div>
             <p class="eyebrow">Solicitud docente</p>
@@ -391,8 +419,8 @@
         <input id="requestProductId" type="hidden" />
         <p id="requestProductInfo" class="muted"></p>
         <div class="field">
-          <label for="requestQuantity">Cantidad solicitada</label
-          ><input id="requestQuantity" type="number" min="1" max="1" step="1" required readonly value="1">
+          <label for="requestReason">Motivo de la solicitud</label>
+          <textarea id="requestReason" rows="3" maxlength="500" required placeholder="Indica para qué actividad necesitas el equipo"></textarea>
         </div>
         <div class="form-actions">
           <button class="button secondary" type="button" data-close="requestBackdrop">
@@ -408,11 +436,11 @@
       aria-modal="true"
       aria-labelledby="teacherModalTitle"
     >
-      <form class="modal" id="teacherForm"><input id="teacherId" type="hidden"><p class="form-error" role="alert" hidden></p>
+      <form class="modal" id="teacherForm">
         <div class="modal-head">
           <div>
             <p class="eyebrow">Administración</p>
-            <h2 id="teacherModalTitle">Crear cuenta docente</h2>
+            <h2 id="teacherModalTitle">Invitar cuenta docente</h2>
           </div>
           <button class="close" type="button" data-close="teacherBackdrop" aria-label="Cerrar">
             ×
@@ -432,19 +460,11 @@
             placeholder="docente@una.ac.cr"
           />
         </div>
-        <div class="field" id="teacherPasswordField"><label for="teacherPassword">Contraseña temporal</label
-          ><input
-            id="teacherPassword"
-            type="password"
-            required
-            minlength="12"
-            autocomplete="new-password"
-          />
-        </div>
+        <p class="form-hint">Supabase enviará un correo para que el docente configure su contraseña. La administración deberá activar la cuenta antes de que pueda ingresar.</p>
         <div class="form-actions">
           <button class="button secondary" type="button" data-close="teacherBackdrop">
             Cancelar</button
-          ><button class="button" type="submit">Crear cuenta</button>
+          ><button class="button" type="submit">Enviar invitación</button>
         </div>
       </form>
     </div>
@@ -455,7 +475,7 @@
       aria-modal="true"
       aria-labelledby="deliveryTitle"
     >
-      <form class="modal" id="deliveryForm"><p class="form-error" role="alert" hidden></p>
+      <form class="modal" id="deliveryForm">
         <div class="modal-head">
           <div>
             <p class="eyebrow">Préstamo</p>
@@ -479,10 +499,6 @@
         </div>
       </form>
     </div>
-    <div class="modal-backdrop" id="passwordBackdrop" role="dialog" aria-modal="true" aria-labelledby="passwordModalTitle"><form class="modal" id="passwordForm">
-<h2 id="passwordModalTitle">Cambiar contraseña</h2><div class="field"><label for="newPassword">Nueva contraseña</label><input type="password" id="newPassword" required minlength="12" autocomplete="new-password"></div>
-<div class="field"><label for="confirmPassword">Confirmar contraseña</label><input type="password" id="confirmPassword" required minlength="12" autocomplete="new-password"></div><p class="form-error" role="alert" hidden></p>
-<div class="form-actions"><button type="button" class="button secondary" data-close="passwordBackdrop">Cancelar</button><button type="submit" class="button">Guardar contraseña</button></div></form></div>
-<div class="toast" id="toast" role="status"></div>
+    <div class="toast" id="toast" role="status"></div>
   </body>
 </html>

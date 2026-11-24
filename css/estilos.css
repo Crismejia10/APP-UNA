@@ -410,6 +410,29 @@ input:focus-visible {
     font-size: 12px;
 }
 
+.login-message {
+    margin: 12px 0 0;
+    color: #55565d;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.login-link {
+    display: block;
+    margin: 12px 0 0 auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--red-dark);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.login-link:hover {
+    text-decoration: underline;
+}
+
 .demo-access {
     margin-top: 22px;
     padding: 14px 15px;
